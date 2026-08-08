@@ -23,5 +23,5 @@ def list_available_books() -> None:
         books.append(book.name)
 
     print("List of available books:")
-    print(books)
-
+    for index, book in enumerate(books, start=1):
+        print(f"{index}. {book}")
