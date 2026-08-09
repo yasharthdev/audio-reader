@@ -1,4 +1,4 @@
-from audio_reader.reader import load_paragraphs, list_available_books
+from audio_reader.reader import load_paragraphs, list_available_books, list_avaiable_voices
 from audio_reader.player import speak_paragraph
 import argparse
 import sys
@@ -11,16 +11,48 @@ def main():
     parser.add_argument(
         "-l", "--list", action="store_true", help="List all available books"
     )
+    # add optional voice argument
+    parser.add_argument(
+        "-v", "--voice",
+        type=str,
+        # other male voices, AndrewNeural, BrianNeural
+        default="en-US-AriaNeural",
+        help="Choose the voice of the audio reader, say Brian"
+    )
+    # the speech rate or speed argument
+    parser.add_argument(
+        "-s", "--speed",
+        type=str,
+        default="+0%",
+        help="The speech rate of the reader, say +50 or -50"
+    )
+    # list all avaiable voices
+    parser.add_argument(
+        "-lv", "--list-voices",
+        action="store_true",
+        help="List all avaiable voices for the audio reader"
+    )
     # read whatever was passed into the terminal and store it in args
     args = parser.parse_args()
+
+    # ensure that args.speed has a percent sign at the end
+    if not args.speed.endswith("%"):
+        args.speed += "%"
+    # ensure that we have en-US- at the start of the voice model name
+    if not args.voice.startswith("en-US-") or not args.voice.endswith("Neural"):
+        args.voice = f"en-US-{args.voice}Neural"
+
     if args.list:
         list_available_books()
+        sys.exit(0)
+    elif args.list_voices:
+        list_avaiable_voices()
         sys.exit(0)
     elif args.filepath:
         paragraphs = load_paragraphs(args.filepath)
         for para in paragraphs:
             print(para)
-            speak_paragraph(para)
+            speak_paragraph(para, args.voice, args.speed)
             user_input = input("Press Enter to continue or q to quit... ")
             if user_input.lower() == "q":
                 break

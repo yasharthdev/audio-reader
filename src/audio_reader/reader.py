@@ -25,3 +25,25 @@ def list_available_books() -> None:
     print("List of available books:")
     for index, book in enumerate(books, start=1):
         print(f"{index}. {book}")
+
+def list_avaiable_voices() -> None:
+    print("""
+    en-US-AnaNeural                    Female    Cartoon, Conversation  Cute
+    en-US-AndrewMultilingualNeural     Male      Conversation, Copilot  Warm, Confident, Authentic, Honest
+    en-US-AndrewNeural                 Male      Conversation, Copilot  Warm, Confident, Authentic, Honest
+    en-US-AriaNeural                   Female    News, Novel            Positive, Confident
+    en-US-AvaMultilingualNeural        Female    Conversation, Copilot  Expressive, Caring, Pleasant, Friendly
+    en-US-AvaNeural                    Female    Conversation, Copilot  Expressive, Caring, Pleasant, Friendly
+    en-US-BrianMultilingualNeural      Male      Conversation, Copilot  Approachable, Casual, Sincere
+    en-US-BrianNeural                  Male      Conversation, Copilot  Approachable, Casual, Sincere
+    en-US-ChristopherNeural            Male      News, Novel            Reliable, Authority
+    en-US-EmmaMultilingualNeural       Female    Conversation, Copilot  Cheerful, Clear, Conversational
+    en-US-EmmaNeural                   Female    Conversation, Copilot  Cheerful, Clear, Conversational
+    en-US-EricNeural                   Male      News, Novel            Rational
+    en-US-GuyNeural                    Male      News, Novel            Passion
+    en-US-JennyNeural                  Female    General                Friendly, Considerate, Comfort
+    en-US-MichelleNeural               Female    News, Novel            Friendly, Pleasant
+    en-US-RogerNeural                  Male      News, Novel            Lively
+    en-US-SteffanNeural                Male      News, Novel            Rational
+    """)
+    print("Usage: uv run audio-reader <book> --voice Jenny")
