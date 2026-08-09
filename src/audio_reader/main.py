@@ -1,10 +1,12 @@
 from audio_reader.reader import load_paragraphs, list_available_books, list_avaiable_voices
-from audio_reader.player import start_reading, is_playing_audio, cleanup_audio
+from audio_reader.player import download_audio, play_audio, is_playing_audio, cleanup_audio
 from pynput import keyboard
 import argparse
 import sys
 import pygame
 import subprocess
+import threading
+import queue
 
 def main():
     # initializing the parser
@@ -70,8 +72,27 @@ def main():
         listener = keyboard.Listener(on_press=on_press)
         # start() runs in the background without freezing python
         listener.start()
+
+        # the tray that holds exactly five files
+        audio_queue = queue.Queue(maxsize=5)
+
+        def background_downloader(paragraphs: list[str], voice: str, speed: str) -> None:
+            """Download 5 paras, put them in audio_queue"""
+            for i, para in enumerate(paragraphs):
+                filepath = f"temp_{i}.mp3"
+                # download the file
+                download_audio(para, filepath, voice, speed)
+                # Put it on the tray (if the tray is full, it waits automatically)
+                audio_queue.put(filepath)
+
+        # run the downloader thread in the background
+        threading.Thread(
+            target=background_downloader,
+            args=(paragraphs, args.voice, args.speed),
+            daemon=True
+        ).start()
         
-        for para in paragraphs:
+        for i, para in enumerate(paragraphs):
             # reset state for each new paragraph
             playback_state = {"quit": False, "skip": False}
 
@@ -80,7 +101,9 @@ def main():
             print(para)
 
             try:
-                start_reading(para, args.voice, args.speed)
+                audio_file = audio_queue.get()
+                play_audio(audio_file)
+
                 while is_playing_audio():
                     # check for skip
                     if playback_state["skip"]:
@@ -96,7 +119,7 @@ def main():
 
             # clean up the audio every time, even in accidental shutdown cases 
             finally:
-                cleanup_audio()
+                cleanup_audio(audio_file)
 
             # ** break the for loop to completely quit the program
             if playback_state["quit"]:
