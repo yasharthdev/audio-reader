@@ -1,8 +1,10 @@
 from audio_reader.reader import load_paragraphs, list_available_books, list_avaiable_voices
 from audio_reader.player import start_reading, is_playing_audio, cleanup_audio
+from pynput import keyboard
 import argparse
 import sys
 import pygame
+import subprocess
 
 def main():
     # initializing the parser
@@ -51,15 +53,57 @@ def main():
         sys.exit(0)
     elif args.filepath:
         paragraphs = load_paragraphs(args.filepath)
+
+        playback_state = { "quit": False, "skip": False }
+        # pynput automatically passes a key here, whenever pressed by the user
+        def on_press(key):
+            try:
+                # key.char gives the actual letter pressed (like 'q' or 's')
+                if key.char == "q":
+                    playback_state["quit"] = True
+                elif key.char == "s":
+                    playback_state["skip"] = True
+            except AttributeError:
+                pass
+
+        # start the listener once in the background
+        listener = keyboard.Listener(on_press=on_press)
+        # start() runs in the background without freezing python
+        listener.start()
+        
         for para in paragraphs:
+            # reset state for each new paragraph
+            playback_state = {"quit": False, "skip": False}
+
+            # to clear the terminal before printing any paragraphs
+            subprocess.run(["clear"])            
             print(para)
+
             try:
                 start_reading(para, args.voice, args.speed)
                 while is_playing_audio():
+                    # check for skip
+                    if playback_state["skip"]:
+                        pygame.mixer.music.stop()
+                        # exit the while loop and continue to next para
+                        break
+                    # check for quit
+                    if playback_state["quit"]:
+                        pygame.mixer.music.stop()
+                        # exit the while loop **
+                        break
                     pygame.time.Clock().tick(10)            
+
             # clean up the audio every time, even in accidental shutdown cases 
             finally:
                 cleanup_audio()
+
+            # ** break the for loop to completely quit the program
+            if playback_state["quit"]:
+                break
+
+        # clean up the background listener after we're done
+        listener.stop()
     else:
         print("Please provide book_name.txt or use --list to see available books")
         sys.exit(1)
