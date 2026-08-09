@@ -1,7 +1,8 @@
 from audio_reader.reader import load_paragraphs, list_available_books, list_avaiable_voices
-from audio_reader.player import speak_paragraph
+from audio_reader.player import start_reading, is_playing_audio, cleanup_audio
 import argparse
 import sys
+import pygame
 
 def main():
     # initializing the parser
@@ -52,10 +53,13 @@ def main():
         paragraphs = load_paragraphs(args.filepath)
         for para in paragraphs:
             print(para)
-            speak_paragraph(para, args.voice, args.speed)
-            user_input = input("Press Enter to continue or q to quit... ")
-            if user_input.lower() == "q":
-                break
+            try:
+                start_reading(para, args.voice, args.speed)
+                while is_playing_audio():
+                    pygame.time.Clock().tick(10)            
+            # clean up the audio every time, even in accidental shutdown cases 
+            finally:
+                cleanup_audio()
     else:
         print("Please provide book_name.txt or use --list to see available books")
         sys.exit(1)
