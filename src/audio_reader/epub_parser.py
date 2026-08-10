@@ -2,10 +2,10 @@ import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 
-def get_epub_paragraphs(book_name: str) -> list[str]:
+def get_epub_paragraphs(filepath: str) -> list[str]:
     """Parses an EPUB file and returns a flat list of text paragraphs."""
     try:
-        filepath = f"books/{book_name}"
+        # We now accept the raw absolute filepath passed from the UI
         book = epub.read_epub(filepath)
     except Exception as e:
         print(f"Error reading EPUB: {e}")

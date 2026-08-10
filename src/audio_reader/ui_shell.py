@@ -6,6 +6,7 @@ import asyncio
 import queue
 import threading
 import pygame
+from audio_reader.epub_parser import get_epub_paragraphs
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox)
@@ -273,21 +274,32 @@ class AudiobookUI(QMainWindow):
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
     def load_book_dialog(self):
+        # Upgrade the filter to accept EPUBs alongside TXT files
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open Text File", "", "Text Files (*.txt);;All Files (*)"
+            self, 
+            "Open Book", 
+            "", 
+            "Books (*.txt *.epub);;Text Files (*.txt);;EPUB Files (*.epub);;All Files (*)"
         )
         
         if file_path:
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                
-                self.book_paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                # --- EPUB HANDLING ---
+                if file_path.lower().endswith('.epub'):
+                    # Call the function exactly as you named it in epub_parser.py
+                    self.book_paragraphs = get_epub_paragraphs(file_path)
+                        
+                # --- TXT HANDLING ---
+                else:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        text = f.read()
+                    self.book_paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
                 
                 if not self.book_paragraphs:
-                    self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty.</p>")
+                    self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
                     return
 
+                # Boot up the engine!
                 self.play_from_index(0)
                 
             except Exception as e:
@@ -325,8 +337,22 @@ class AudiobookUI(QMainWindow):
         self.play_from_index(self.current_paragraph_index - 1)
 
     def update_reader_box(self, index, text):
-        self.current_paragraph_index = index # Sync UI state with thread state
+        self.current_paragraph_index = index 
+        
+        # 1. Grab the scrollbar and save its current position
+        scrollbar = self.reader_box.verticalScrollBar()
+        
+        # Safely get the value to appease strict type checkers
+        current_scroll = 0
+        if scrollbar is not None:
+            current_scroll = scrollbar.value()
+        
+        # 2. Update the text (which automatically resets the scroll to 0)
         self.reader_box.setHtml(f"<h3>Paragraph {index + 1} of {len(self.book_paragraphs)}:</h3><p>{text}</p>")
+        
+        # 3. Instantly snap the scrollbar back to where you left it
+        if scrollbar is not None:
+            scrollbar.setValue(current_scroll)
 
     def toggle_pause(self):
         if hasattr(self, 'engine_thread'):
