@@ -48,27 +48,25 @@ def cleanup_all_audio() -> None:
 
 
 async def _generate_audio(text: str, file_path: str, voice: str, speed: str) -> None:
-    communicate = edge_tts.Communicate(text, voice, rate=speed)
+    # 1. We pass boundary="WordBoundary" to override the new default!
+    communicate = edge_tts.Communicate(text, voice, rate=speed, boundary="WordBoundary")
+    
     sub_maker = edge_tts.SubMaker()
     audio_data = b""
 
-    # Open the stream and catch the chunks as they arrive
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
-            # Use .get() to safely extract the bytes and satisfy the linter
             audio_chunk = chunk.get("data")
             if isinstance(audio_chunk, bytes):
                 audio_data += audio_chunk
                 
-        elif chunk["type"] == "WordBoundary":
-            # The new edge-tts API takes the entire chunk directly!
+        # 2. Keep catching both just to be absolutely safe
+        elif chunk["type"] in ["WordBoundary", "SentenceBoundary"]:
             sub_maker.feed(chunk)
 
-    # 1. Save the final MP3 file
     with open(file_path, "wb") as file:
         file.write(audio_data)
         
-    # 2. Save the subtitle file right next to it (edge-tts uses SRT natively now)
     srt_path = file_path.replace(".mp3", ".srt")
     with open(srt_path, "w", encoding="utf-8") as file:
         file.write(sub_maker.get_srt())
