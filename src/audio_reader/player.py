@@ -8,6 +8,7 @@ from pathlib import Path
 import edge_tts
 import asyncio
 import pygame
+import glob
 
 def download_audio(text: str, filepath: str, voice: str, speed: str) -> None:
     asyncio.run(_generate_audio(text, filepath, voice, speed))
@@ -29,6 +30,17 @@ def cleanup_audio(filepath: str) -> None:
     pygame.mixer.music.unload()
     # finally delete the temp file to save space
     Path(filepath).unlink()
+
+def cleanup_all_audio() -> None:
+    """Sweeps the directory and deletes any leftover temporary mp3 files."""
+    # Find all files matching the pattern
+    orphaned_files = glob.glob("temp_*.mp3")
+    
+    for file in orphaned_files:
+        try:
+            os.remove(file)
+        except OSError as e:
+            print(f"Could not delete {file}: {e}")
 
 
 async def _generate_audio(text: str, file_path: str, voice: str, speed: str) -> None:

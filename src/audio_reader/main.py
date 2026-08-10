@@ -1,5 +1,5 @@
 from audio_reader.reader import load_paragraphs, list_available_books, list_avaiable_voices
-from audio_reader.player import download_audio, play_audio, is_playing_audio, cleanup_audio
+from audio_reader.player import download_audio, play_audio, is_playing_audio, cleanup_audio, cleanup_all_audio
 from pynput import keyboard
 import argparse
 import sys
@@ -21,7 +21,7 @@ def main():
         "-v", "--voice",
         type=str,
         # other male voices, AndrewNeural, BrianNeural
-        default="en-US-AriaNeural",
+        default="en-US-BrianNeural",
         help="Choose the voice of the audio reader, say Brian"
     )
     # the speech rate or speed argument
@@ -127,6 +127,9 @@ def main():
 
         # clean up the background listener after we're done
         listener.stop()
+
+        # delete any leftover downloaded files by the downloader
+        cleanup_all_audio()
     else:
         print("Please provide book_name.txt or use --list to see available books")
         sys.exit(1)
