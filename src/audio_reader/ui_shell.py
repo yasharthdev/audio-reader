@@ -98,11 +98,13 @@ def cleanup_audio(filepath: str):
 # 2. THE PRODUCER-CONSUMER THREAD
 # ==========================================
 class AudioEngineThread(QThread):
-    paragraph_changed = pyqtSignal(str)
+    # UPGRADE: Emit an INT (the index) alongside the STR (the html text)
+    paragraph_changed = pyqtSignal(int, str) 
 
-    def __init__(self, paragraphs, voice="en-US-BrianNeural", speed="+0%"):
+    def __init__(self, paragraphs, start_index=0, voice="en-US-BrianNeural", speed="+0%"):
         super().__init__()
         self.paragraphs = paragraphs
+        self.start_index = start_index  # <--- Track where we start
         self.voice = voice
         self.speed = speed
         
@@ -115,36 +117,51 @@ class AudioEngineThread(QThread):
         if not self.paragraphs or not self.is_running:
             return
 
-        # --- THE PRODUCER: Dedicated Downloader Worker ---
+        # --- THE PRODUCER ---
         def downloader_worker():
-            for i, para in enumerate(self.paragraphs):
+            for i in range(self.start_index, len(self.paragraphs)):
                 if not self.is_running:
                     break
                 
                 mp3_path = f"temp_{i}.mp3"
-                download_audio(para, mp3_path, self.voice, self.speed)
+                download_audio(self.paragraphs[i], mp3_path, self.voice, self.speed)
                 srt_path = mp3_path.replace(".mp3", ".srt")
                 
-                self.audio_queue.put((mp3_path, srt_path, para))
+                # FIX: Add a timeout so it checks if the app is closing instead of freezing
+                while self.is_running:
+                    try:
+                        self.audio_queue.put((mp3_path, srt_path, self.paragraphs[i], i), timeout=0.5)
+                        break
+                    except queue.Full:
+                        continue
 
         producer = threading.Thread(target=downloader_worker, daemon=True)
         producer.start()
 
-        # --- THE CONSUMER: Audio Player & UI Sync ---
-        for _ in range(len(self.paragraphs)):
+        # --- THE CONSUMER ---
+        for _ in range(self.start_index, len(self.paragraphs)):
             if not self.is_running:
                 break
                 
             self.is_paused = False
             
-            mp3_path, srt_path, para = self.audio_queue.get()
+            # FIX: Add a timeout so it checks if the app is closing instead of freezing
+            queue_item = None
+            while self.is_running:
+                try:
+                    queue_item = self.audio_queue.get(timeout=0.5)
+                    break
+                except queue.Empty:
+                    continue
             
-            # THE PRO FIX: Find start/end character indices of words in the ORIGINAL text.
-            # [^\W_]+  -> Matches any sequence of letters/numbers
-            # (?:[-'’][^\W_]+)* -> Matches internal hyphens, straight quotes, and smart quotes!
+            if not queue_item:
+                break
+                
+            mp3_path, srt_path, para, current_index = queue_item
+            
             word_matches = list(re.finditer(r"[^\W_]+(?:[-'’][^\W_]+)*", para))
             
-            self.paragraph_changed.emit(para.replace('\n', '<br>'))
+            self.paragraph_changed.emit(current_index, para.replace('\n', '<br>'))
             play_audio(mp3_path)
             
             was_paused = False
@@ -160,7 +177,6 @@ class AudioEngineThread(QThread):
                     was_paused = False
                     pygame.time.wait(50)
                 
-                # --- SYNC LOOP ---
                 if not self.is_paused and is_playing_audio():
                     current_time = pygame.mixer.music.get_pos()
                     
@@ -168,14 +184,11 @@ class AudioEngineThread(QThread):
                         target_word = srt_data[current_word_idx]
                         
                         if current_time >= target_word["start"]:
-                            
-                            # Ensure we don't go out of bounds if TTS generates extra audio tokens
                             if current_word_idx < len(word_matches):
                                 match = word_matches[current_word_idx]
                                 start_idx = match.start()
                                 end_idx = match.end()
                                 
-                                # Slice the original string to insert the highlight tags!
                                 html_text = (
                                     para[:start_idx] + 
                                     "<span style='background-color: green;'>" + 
@@ -184,8 +197,7 @@ class AudioEngineThread(QThread):
                                     para[end_idx:]
                                 )
                                 
-                                # Use <br> so PyQt respects actual paragraph breaks if they exist
-                                self.paragraph_changed.emit(html_text.replace('\n', '<br>'))
+                                self.paragraph_changed.emit(current_index, html_text.replace('\n', '<br>'))
                                 
                             current_word_idx += 1
                 
@@ -211,6 +223,10 @@ class AudiobookUI(QMainWindow):
         self.setWindowTitle("AI Audiobook & Notes Environment")
         self.resize(1000, 600)
 
+        # Track full book state
+        self.book_paragraphs = []
+        self.current_paragraph_index = 0
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
@@ -223,16 +239,20 @@ class AudiobookUI(QMainWindow):
         button_layout = QHBoxLayout()
         self.load_button = QPushButton("Load Book (.txt)")
         
-        # PRO UPDATE: Speed dropdown exactly as requested
         self.speed_combo = QComboBox()
         self.speed_combo.addItems(["+0%", "+50%", "+100%", "+150%", "+200%", "+250%", "+300%"])
         self.speed_combo.setCurrentText("+0%") 
         
+        # New Navigation Buttons!
+        self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
+        self.next_button = QPushButton("Next >>")
         
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.speed_combo)
+        button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
+        button_layout.addWidget(self.next_button)
         
         left_panel.addWidget(self.reader_box)
         left_panel.addLayout(button_layout)
@@ -247,6 +267,8 @@ class AudiobookUI(QMainWindow):
 
         self.load_button.clicked.connect(self.load_book_dialog)
         self.play_button.clicked.connect(self.toggle_pause)
+        self.next_button.clicked.connect(self.skip_next)
+        self.prev_button.clicked.connect(self.skip_prev)
         
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
@@ -260,27 +282,51 @@ class AudiobookUI(QMainWindow):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
                 
-                paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                self.book_paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
                 
-                if not paragraphs:
+                if not self.book_paragraphs:
                     self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty.</p>")
                     return
 
-                if hasattr(self, 'engine_thread') and self.engine_thread.isRunning():
-                    self.engine_thread.is_running = False
-                    self.engine_thread.wait() 
-
-                selected_speed = self.speed_combo.currentText()
-
-                self.engine_thread = AudioEngineThread(paragraphs, speed=selected_speed)
-                self.engine_thread.paragraph_changed.connect(self.update_reader_box)
-                self.engine_thread.start()
+                self.play_from_index(0)
                 
             except Exception as e:
                 self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {e}</p>")
 
-    def update_reader_box(self, text):
-        self.reader_box.setHtml(f"<h3>Current Paragraph:</h3><p>{text}</p>")
+    def play_from_index(self, index):
+        """Kills current thread, cleans up, and boots a new one at the target index."""
+        if index < 0 or index >= len(self.book_paragraphs):
+            return
+
+        if hasattr(self, 'engine_thread') and self.engine_thread.isRunning():
+            self.engine_thread.is_running = False
+            self.engine_thread.wait() 
+
+        # Sweep folder so skips don't leave zombie audio files
+        for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
+            try:
+                os.remove(file)
+            except OSError:
+                pass
+
+        selected_speed = self.speed_combo.currentText()
+        self.engine_thread = AudioEngineThread(
+            self.book_paragraphs, 
+            start_index=index, 
+            speed=selected_speed
+        )
+        self.engine_thread.paragraph_changed.connect(self.update_reader_box)
+        self.engine_thread.start()
+
+    def skip_next(self):
+        self.play_from_index(self.current_paragraph_index + 1)
+
+    def skip_prev(self):
+        self.play_from_index(self.current_paragraph_index - 1)
+
+    def update_reader_box(self, index, text):
+        self.current_paragraph_index = index # Sync UI state with thread state
+        self.reader_box.setHtml(f"<h3>Paragraph {index + 1} of {len(self.book_paragraphs)}:</h3><p>{text}</p>")
 
     def toggle_pause(self):
         if hasattr(self, 'engine_thread'):
