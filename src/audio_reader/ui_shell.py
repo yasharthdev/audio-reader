@@ -2,44 +2,54 @@ import sys
 import os
 import glob
 import re
+import asyncio
+import queue
+import threading
 import pygame
-from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
-                             QFileDialog)
+                             QFileDialog, QComboBox)
+from PyQt6.QtCore import QThread, pyqtSignal
 
-# Import your actual functions!
-from audio_reader.player import download_audio, play_audio, is_playing_audio, cleanup_audio
+pygame.mixer.init()
 
 # ==========================================
-# 1. SRT PARSING HELPERS
+# 1. CORE ENGINE FUNCTIONS
 # ==========================================
+def download_audio(text: str, file_path: str, voice: str, speed: str) -> None:
+    async def _generate():
+        communicate = edge_tts.Communicate(text, voice, rate=speed, boundary="WordBoundary")
+        sub_maker = edge_tts.SubMaker()
+        audio_data = b""
+
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunk = chunk.get("data")
+                if isinstance(audio_chunk, bytes):
+                    audio_data += audio_chunk
+            elif chunk["type"] in ["WordBoundary", "SentenceBoundary"]:
+                sub_maker.feed(chunk)
+
+        with open(file_path, "wb") as f:
+            f.write(audio_data)
+            
+        srt_path = file_path.replace(".mp3", ".srt")
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(sub_maker.get_srt())
+
+    import edge_tts
+    asyncio.run(_generate())
+
 def time_to_ms(time_str: str) -> int:
-    """Bulletproof timestamp converter."""
-    try:
-        time_str = time_str.strip().replace(',', '.')
-        parts = time_str.split(':')
-        
-        if len(parts) == 3:
-            h, m, s_ms = parts
-        elif len(parts) == 2:
-            h = 0
-            m, s_ms = parts
-        else:
-            return 0
-            
-        if '.' in s_ms:
-            s, ms = s_ms.split('.')
-        else:
-            s = s_ms
-            ms = 0
-            
-        return int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
-    except Exception:
-        return 0
+    parts = time_str.strip().split(':')
+    hours = int(parts[0])
+    minutes = int(parts[1])
+    sec_parts = parts[2].split(',')
+    seconds = int(sec_parts[0])
+    milliseconds = int(sec_parts[1])
+    return (hours * 3600000) + (minutes * 60000) + (seconds * 1000) + milliseconds
 
 def parse_srt(filepath: str) -> list[dict]:
-    """A parser that automatically polyfills missing word boundaries."""
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             lines = [line.strip() for line in f.readlines() if line.strip()]
@@ -48,35 +58,44 @@ def parse_srt(filepath: str) -> list[dict]:
 
     words_data = []
     for i, line in enumerate(lines):
-        if '-->' in line:
-            if i + 1 < len(lines):
-                # Grab both the start AND end times
-                times = line.split('-->')
-                start_ms = time_to_ms(times[0])
-                end_ms = time_to_ms(times[1])
+        if '-->' in line and i + 1 < len(lines):
+            times = line.split('-->')
+            start_ms = time_to_ms(times[0])
+            end_ms = time_to_ms(times[1])
+            text_block = lines[i + 1].strip()
+            
+            words = text_block.split()
+            if len(words) > 1:
+                total_duration = end_ms - start_ms
+                time_per_word = total_duration / len(words)
+                for w_idx, w in enumerate(words):
+                    word_start = start_ms + int(w_idx * time_per_word)
+                    words_data.append({"word": w, "start": word_start})
+            else:
+                words_data.append({"word": text_block, "start": start_ms})
                 
-                text_block = lines[i + 1].strip()
-                
-                # --- THE POLYFILL ---
-                # If Edge TTS sent a full sentence, split it!
-                words = text_block.split()
-                if len(words) > 1:
-                    # Mathematically calculate the time per word
-                    total_duration = end_ms - start_ms
-                    time_per_word = total_duration / len(words)
-                    
-                    for w_idx, w in enumerate(words):
-                        word_start = start_ms + int(w_idx * time_per_word)
-                        words_data.append({"word": w, "start": word_start})
-                else:
-                    # It is already a single word
-                    words_data.append({"word": text_block, "start": start_ms})
-                
-    print(f"[DEBUG] Interpolated {len(words_data)} words from {filepath}")
     return words_data
 
+def play_audio(filepath: str):
+    pygame.mixer.music.load(filepath)
+    pygame.mixer.music.play()
+
+def is_playing_audio() -> bool:
+    return pygame.mixer.music.get_busy()
+
+def cleanup_audio(filepath: str):
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        srt_path = filepath.replace(".mp3", ".srt")
+        if os.path.exists(srt_path):
+            os.remove(srt_path)
+    except OSError:
+        pass
+
+
 # ==========================================
-# 2. THE BACKGROUND WORKER
+# 2. THE PRODUCER-CONSUMER THREAD
 # ==========================================
 class AudioEngineThread(QThread):
     paragraph_changed = pyqtSignal(str)
@@ -89,31 +108,46 @@ class AudioEngineThread(QThread):
         
         self.is_running = True
         self.is_paused = False
-        self.is_skipped = False
+        
+        self.audio_queue = queue.Queue(maxsize=3)
 
     def run(self):
-        for i, para in enumerate(self.paragraphs):
+        if not self.paragraphs or not self.is_running:
+            return
+
+        # --- THE PRODUCER: Dedicated Downloader Worker ---
+        def downloader_worker():
+            for i, para in enumerate(self.paragraphs):
+                if not self.is_running:
+                    break
+                
+                mp3_path = f"temp_{i}.mp3"
+                download_audio(para, mp3_path, self.voice, self.speed)
+                srt_path = mp3_path.replace(".mp3", ".srt")
+                
+                self.audio_queue.put((mp3_path, srt_path, para))
+
+        producer = threading.Thread(target=downloader_worker, daemon=True)
+        producer.start()
+
+        # --- THE CONSUMER: Audio Player & UI Sync ---
+        for _ in range(len(self.paragraphs)):
             if not self.is_running:
                 break
-            
-            self.is_skipped = False
+                
             self.is_paused = False
             
-            # --- 1. PRE-PROCESS & TOKENIZE ONCE PER PARAGRAPH ---
-            # Normalize spaced hyphens so they match the TTS engine's tokenization
-            clean_para = re.sub(r'\s*-\s*', '-', para)
-            all_tokens = re.findall(r"[\w'-]+|[.,!?;]", clean_para)
+            mp3_path, srt_path, para = self.audio_queue.get()
             
-            # Send the initial un-highlighted text to the UI
-            self.paragraph_changed.emit(para)
+            # THE PRO FIX: Find start/end character indices of words in the ORIGINAL text.
+            # [^\W_]+  -> Matches any sequence of letters/numbers
+            # (?:[-'’][^\W_]+)* -> Matches internal hyphens, straight quotes, and smart quotes!
+            word_matches = list(re.finditer(r"[^\W_]+(?:[-'’][^\W_]+)*", para))
             
-            filepath = f"temp_{i}.mp3"
-            download_audio(para, filepath, self.voice, self.speed)
-            play_audio(filepath)
+            self.paragraph_changed.emit(para.replace('\n', '<br>'))
+            play_audio(mp3_path)
+            
             was_paused = False
-            
-            # Load the SRT data we just downloaded!
-            srt_path = filepath.replace(".mp3", ".srt")
             srt_data = parse_srt(srt_path)
             current_word_idx = 0
             
@@ -121,13 +155,12 @@ class AudioEngineThread(QThread):
                 if self.is_paused and not was_paused:
                     pygame.mixer.music.pause()
                     was_paused = True
-                    
                 elif not self.is_paused and was_paused:
                     pygame.mixer.music.unpause()
                     was_paused = False
                     pygame.time.wait(50)
                 
-                # --- THE SYNC LOOP ---
+                # --- SYNC LOOP ---
                 if not self.is_paused and is_playing_audio():
                     current_time = pygame.mixer.music.get_pos()
                     
@@ -135,37 +168,42 @@ class AudioEngineThread(QThread):
                         target_word = srt_data[current_word_idx]
                         
                         if current_time >= target_word["start"]:
-                            html_text = ""
-                            word_counter = 0
                             
-                            # Build the highlighted text using our pre-calculated tokens
-                            for token in all_tokens:
-                                is_word = re.match(r"[\w'-]+", token)
+                            # Ensure we don't go out of bounds if TTS generates extra audio tokens
+                            if current_word_idx < len(word_matches):
+                                match = word_matches[current_word_idx]
+                                start_idx = match.start()
+                                end_idx = match.end()
                                 
-                                if is_word and word_counter == current_word_idx:
-                                    html_text += f"<span style='background-color: green;'>{token}</span> "
-                                    word_counter += 1
-                                else:
-                                    html_text += f"{token} "
-                                    if is_word:
-                                        word_counter += 1
-                                    
-                            self.paragraph_changed.emit(html_text.strip())
+                                # Slice the original string to insert the highlight tags!
+                                html_text = (
+                                    para[:start_idx] + 
+                                    "<span style='background-color: green;'>" + 
+                                    para[start_idx:end_idx] + 
+                                    "</span>" + 
+                                    para[end_idx:]
+                                )
+                                
+                                # Use <br> so PyQt respects actual paragraph breaks if they exist
+                                self.paragraph_changed.emit(html_text.replace('\n', '<br>'))
+                                
                             current_word_idx += 1
                 
                 if not self.is_paused and not is_playing_audio():
                     break
                     
-                if self.is_skipped or not self.is_running:
+                if not self.is_running:
                     pygame.mixer.music.stop()
                     break
                     
                 pygame.time.Clock().tick(30)
                 
-            cleanup_audio(filepath)
+            cleanup_audio(mp3_path)
+            self.audio_queue.task_done()
+
 
 # ==========================================
-# 3. THE UI THREAD (Canvas stays exactly the same!)
+# 3. THE UI CANVAS
 # ==========================================
 class AudiobookUI(QMainWindow):
     def __init__(self):
@@ -177,23 +215,28 @@ class AudiobookUI(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
-        # Left Panel
         left_panel = QVBoxLayout()
         self.reader_box = QTextEdit()
         self.reader_box.setReadOnly(True)
         self.reader_box.setStyleSheet("font-size: 18px;") 
         
-        # New Horizontal Layout for Buttons
         button_layout = QHBoxLayout()
         self.load_button = QPushButton("Load Book (.txt)")
+        
+        # PRO UPDATE: Speed dropdown exactly as requested
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["+0%", "+50%", "+100%", "+150%", "+200%", "+250%", "+300%"])
+        self.speed_combo.setCurrentText("+0%") 
+        
         self.play_button = QPushButton("Play / Pause")
+        
         button_layout.addWidget(self.load_button)
+        button_layout.addWidget(self.speed_combo)
         button_layout.addWidget(self.play_button)
         
         left_panel.addWidget(self.reader_box)
         left_panel.addLayout(button_layout)
 
-        # Right Panel
         right_panel = QVBoxLayout()
         self.notes_box = QTextEdit()
         self.notes_box.setPlaceholderText("Start typing your timestamped notes here...")
@@ -202,43 +245,34 @@ class AudiobookUI(QMainWindow):
         main_layout.addLayout(left_panel)
         main_layout.addLayout(right_panel)
 
-        # Connect the Buttons
         self.load_button.clicked.connect(self.load_book_dialog)
         self.play_button.clicked.connect(self.toggle_pause)
         
-        # Set initial boot message
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
     def load_book_dialog(self):
-        """Opens the macOS Finder to select a text file."""
-        # Open the native file picker
         file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "Open Text File", 
-            "", 
-            "Text Files (*.txt);;All Files (*)"
+            self, "Open Text File", "", "Text Files (*.txt);;All Files (*)"
         )
         
         if file_path:
             try:
-                # Read the file
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
                 
-                # Split the text into paragraphs (splitting by double newline)
                 paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
                 
                 if not paragraphs:
                     self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty.</p>")
                     return
 
-                # If an audiobook is already playing, safely kill it
                 if hasattr(self, 'engine_thread') and self.engine_thread.isRunning():
                     self.engine_thread.is_running = False
                     self.engine_thread.wait() 
 
-                # Boot up the new audiobook thread!
-                self.engine_thread = AudioEngineThread(paragraphs)
+                selected_speed = self.speed_combo.currentText()
+
+                self.engine_thread = AudioEngineThread(paragraphs, speed=selected_speed)
                 self.engine_thread.paragraph_changed.connect(self.update_reader_box)
                 self.engine_thread.start()
                 
@@ -253,21 +287,17 @@ class AudiobookUI(QMainWindow):
             self.engine_thread.is_paused = not self.engine_thread.is_paused
 
     def closeEvent(self, event):
-        """Fires automatically when the user closes the window."""
-        # 1. Safely shut down the background engine
         if hasattr(self, 'engine_thread'):
             self.engine_thread.is_running = False
             self.engine_thread.quit()
             self.engine_thread.wait()
             
-        # 2. Sweep the project folder and delete any zombie temp files
         for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
             try:
                 os.remove(file)
             except OSError:
                 pass
                 
-        # 3. Allow the window to close
         event.accept()
 
 if __name__ == "__main__":
