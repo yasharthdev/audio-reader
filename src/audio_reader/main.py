@@ -1,6 +1,6 @@
 from audio_reader.reader import load_paragraphs, list_available_books, list_avaiable_voices
-from audio_reader.player import download_audio, play_audio, is_playing_audio, cleanup_audio, cleanup_all_audio
 from audio_reader.engine import stream_audiobook
+from audio_reader.epub_parser import get_epub_paragraphs
 import argparse
 import sys
 
@@ -46,14 +46,31 @@ def main():
     if args.list:
         list_available_books()
         sys.exit(0)
+
     elif args.list_voices:
         list_avaiable_voices()
         sys.exit(0)
+
     elif args.filepath:
-        # load the paragraphs from the audiobook
-        paragraphs = load_paragraphs(args.filepath)
-        # stream the audiobook
-        stream_audiobook(paragraphs, args.voice, args.speed)
+            # THE ROUTER: Check the extension and parse accordingly
+            if args.filepath.endswith('.epub'):
+                print(f"[System] Routing to EPUB Parser...")
+                paragraphs = get_epub_paragraphs(args.filepath)
+            elif args.filepath.endswith('.txt'):
+                print(f"[System] Routing to Text Parser...")
+                paragraphs = load_paragraphs(args.filepath)
+            else:
+                print("Error: Unsupported file format. Please provide a .txt or .epub file.")
+                sys.exit(1)
+
+            # Safety check: ensure the parser actually found text
+            if not paragraphs:
+                print("Error: No text could be extracted from the file.")
+                sys.exit(1)
+
+            # Stream the audiobook (engine doesn't care where the text came from)
+            stream_audiobook(paragraphs, args.voice, args.speed)
+            
     else:
         print("Please provide book_name.txt or use --list to see available books")
         sys.exit(1)

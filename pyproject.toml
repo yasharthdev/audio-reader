@@ -5,11 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "ebooklib>=0.20",
     "edge-tts>=7.2.8",
     "pygame>=2.6.1",
     "pynput>=1.8.2",
     "pyobjc>=12.2.1",
-    "pyttsx3>=2.99",
 ]
 [project.scripts]
 audio-reader = "audio_reader.main:main"
