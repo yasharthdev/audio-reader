@@ -11,6 +11,7 @@ dependencies = [
     "pygame>=2.6.1",
     "pynput>=1.8.2",
     "pyobjc>=12.2.1",
+    "pyqt6>=6.11.0",
 ]
 [project.scripts]
 audio-reader = "audio_reader.main:main"
