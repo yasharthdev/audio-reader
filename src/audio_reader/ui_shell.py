@@ -1,10 +1,12 @@
 import sys
-import time
+import os
+import glob
+import re
 import pygame
-from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
-                             QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton)
+                             QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
+                             QFileDialog)
 
 # Import your actual functions!
 from audio_reader.player import download_audio, play_audio, is_playing_audio, cleanup_audio
@@ -97,6 +99,11 @@ class AudioEngineThread(QThread):
             self.is_skipped = False
             self.is_paused = False
             
+            # --- 1. PRE-PROCESS & TOKENIZE ONCE PER PARAGRAPH ---
+            # Normalize spaced hyphens so they match the TTS engine's tokenization
+            clean_para = re.sub(r'\s*-\s*', '-', para)
+            all_tokens = re.findall(r"[\w'-]+|[.,!?;]", clean_para)
+            
             # Send the initial un-highlighted text to the UI
             self.paragraph_changed.emit(para)
             
@@ -122,25 +129,27 @@ class AudioEngineThread(QThread):
                 
                 # --- THE SYNC LOOP ---
                 if not self.is_paused and is_playing_audio():
-                    # Get the current milliseconds from the Pygame clock
                     current_time = pygame.mixer.music.get_pos()
                     
-                    # Check if it is time to highlight the next word
                     if current_word_idx < len(srt_data):
                         target_word = srt_data[current_word_idx]
                         
                         if current_time >= target_word["start"]:
-                            # We hit the timestamp! Build an HTML string with inline CSS
                             html_text = ""
-                            for idx, w_data in enumerate(srt_data):
-                                if idx == current_word_idx:
-                                    # Highlight current word using a span with a background color
-                                    highlight_style = "background-color: red;"
-                                    html_text += f"<span style='{highlight_style}'><b>{w_data['word']}</b></span> "
+                            word_counter = 0
+                            
+                            # Build the highlighted text using our pre-calculated tokens
+                            for token in all_tokens:
+                                is_word = re.match(r"[\w'-]+", token)
+                                
+                                if is_word and word_counter == current_word_idx:
+                                    html_text += f"<span style='background-color: green;'>{token}</span> "
+                                    word_counter += 1
                                 else:
-                                    html_text += f"{w_data['word']} "
+                                    html_text += f"{token} "
+                                    if is_word:
+                                        word_counter += 1
                                     
-                            # Send the freshly highlighted HTML to the UI
                             self.paragraph_changed.emit(html_text.strip())
                             current_word_idx += 1
                 
@@ -151,7 +160,7 @@ class AudioEngineThread(QThread):
                     pygame.mixer.music.stop()
                     break
                     
-                pygame.time.Clock().tick(30) # Increased tick rate for smoother UI updates
+                pygame.time.Clock().tick(30)
                 
             cleanup_audio(filepath)
 
@@ -168,16 +177,23 @@ class AudiobookUI(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
+        # Left Panel
         left_panel = QVBoxLayout()
         self.reader_box = QTextEdit()
         self.reader_box.setReadOnly(True)
-        # Increase the font size so the highlighting is easy to see
         self.reader_box.setStyleSheet("font-size: 18px;") 
         
+        # New Horizontal Layout for Buttons
+        button_layout = QHBoxLayout()
+        self.load_button = QPushButton("Load Book (.txt)")
         self.play_button = QPushButton("Play / Pause")
+        button_layout.addWidget(self.load_button)
+        button_layout.addWidget(self.play_button)
+        
         left_panel.addWidget(self.reader_box)
-        left_panel.addWidget(self.play_button)
+        left_panel.addLayout(button_layout)
 
+        # Right Panel
         right_panel = QVBoxLayout()
         self.notes_box = QTextEdit()
         self.notes_box.setPlaceholderText("Start typing your timestamped notes here...")
@@ -186,16 +202,48 @@ class AudiobookUI(QMainWindow):
         main_layout.addLayout(left_panel)
         main_layout.addLayout(right_panel)
 
-        # Test paragraphs
-        test_paragraphs = [
-            "This is the first real audio test inside our PyQt6 environment.", 
-            "The background thread is currently downloading this audio.", 
-            "If you can hear this, the QThread and Pygame are successfully integrated!"
-        ]
-        self.engine_thread = AudioEngineThread(test_paragraphs)
-        self.engine_thread.paragraph_changed.connect(self.update_reader_box)
+        # Connect the Buttons
+        self.load_button.clicked.connect(self.load_book_dialog)
         self.play_button.clicked.connect(self.toggle_pause)
-        self.engine_thread.start()
+        
+        # Set initial boot message
+        self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
+
+    def load_book_dialog(self):
+        """Opens the macOS Finder to select a text file."""
+        # Open the native file picker
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Open Text File", 
+            "", 
+            "Text Files (*.txt);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                # Read the file
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                
+                # Split the text into paragraphs (splitting by double newline)
+                paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                
+                if not paragraphs:
+                    self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty.</p>")
+                    return
+
+                # If an audiobook is already playing, safely kill it
+                if hasattr(self, 'engine_thread') and self.engine_thread.isRunning():
+                    self.engine_thread.is_running = False
+                    self.engine_thread.wait() 
+
+                # Boot up the new audiobook thread!
+                self.engine_thread = AudioEngineThread(paragraphs)
+                self.engine_thread.paragraph_changed.connect(self.update_reader_box)
+                self.engine_thread.start()
+                
+            except Exception as e:
+                self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {e}</p>")
 
     def update_reader_box(self, text):
         self.reader_box.setHtml(f"<h3>Current Paragraph:</h3><p>{text}</p>")
@@ -203,6 +251,24 @@ class AudiobookUI(QMainWindow):
     def toggle_pause(self):
         if hasattr(self, 'engine_thread'):
             self.engine_thread.is_paused = not self.engine_thread.is_paused
+
+    def closeEvent(self, event):
+        """Fires automatically when the user closes the window."""
+        # 1. Safely shut down the background engine
+        if hasattr(self, 'engine_thread'):
+            self.engine_thread.is_running = False
+            self.engine_thread.quit()
+            self.engine_thread.wait()
+            
+        # 2. Sweep the project folder and delete any zombie temp files
+        for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
+            try:
+                os.remove(file)
+            except OSError:
+                pass
+                
+        # 3. Allow the window to close
+        event.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
