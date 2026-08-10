@@ -9,3 +9,5 @@ wheels/
 # Virtual environments
 .venv
 .vscode/
+.DS_Store
+temp_*.mp3
