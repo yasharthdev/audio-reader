@@ -56,7 +56,7 @@ def main():
     elif args.filepath:
         paragraphs = load_paragraphs(args.filepath)
 
-        playback_state = { "quit": False, "skip": False }
+        
         # pynput automatically passes a key here, whenever pressed by the user
         def on_press(key):
             try:
@@ -66,7 +66,11 @@ def main():
                 elif key.char == "s":
                     playback_state["skip"] = True
             except AttributeError:
-                pass
+                # this is the block where keys like shift, enter, etc are sent
+                if key == keyboard.Key.space:
+                    # if pause if False, it changes to True and vice versa
+                    playback_state["pause"] = not(playback_state["pause"])
+
 
         # start the listener once in the background
         listener = keyboard.Listener(on_press=on_press)
@@ -93,8 +97,7 @@ def main():
         ).start()
         
         for i, para in enumerate(paragraphs):
-            # reset state for each new paragraph
-            playback_state = {"quit": False, "skip": False}
+            playback_state = {"quit": False, "skip": False, "pause": False}
 
             # to clear the terminal before printing any paragraphs
             subprocess.run(["clear"])            
@@ -104,7 +107,23 @@ def main():
                 audio_file = audio_queue.get()
                 play_audio(audio_file)
 
-                while is_playing_audio():
+                was_paused = False
+
+                while True:
+                    # check for pause
+                    if playback_state["pause"] and not was_paused:
+                        pygame.mixer.music.pause()
+                        was_paused = True
+                    # check if we unpaused
+                    elif not playback_state["pause"] and was_paused:
+                        pygame.mixer.music.unpause()
+                        was_paused = False
+                        # give pygame 50ms to wake up before checking get_busy()
+                        pygame.time.wait(50)
+                    # if we aren't paused and the audio isn't playing, break the loop
+                    if not playback_state["pause"] and not is_playing_audio():
+                        break
+                    
                     # check for skip
                     if playback_state["skip"]:
                         pygame.mixer.music.stop()
