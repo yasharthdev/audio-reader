@@ -6,6 +6,7 @@ import asyncio
 import queue
 import threading
 import pygame
+import json
 from audio_reader.epub_parser import get_epub_paragraphs
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
@@ -227,6 +228,7 @@ class AudiobookUI(QMainWindow):
         # Track full book state
         self.book_paragraphs = []
         self.current_paragraph_index = 0
+        self.current_file_path = None
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -273,6 +275,50 @@ class AudiobookUI(QMainWindow):
         
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
+    def get_bookmark(self, file_path):
+        """Reads the JSON database and returns the saved paragraph index."""
+        bookmarks_file = "bookmarks.json"
+        if not os.path.exists(bookmarks_file):
+            return 0
+            
+        try:
+            with open(bookmarks_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data.get(file_path, 0)
+        except Exception:
+            return 0 # If the JSON is corrupted, default to the start
+
+    def save_bookmark(self):
+        """Saves the current file and paragraph index to the JSON database."""
+        # Clean, simple check now that the variable is officially declared
+        if not self.current_file_path:
+            return
+            
+        bookmarks_file = "bookmarks.json"
+        data = {}
+        
+        # Load existing bookmarks so we don't overwrite other books
+        if os.path.exists(bookmarks_file):
+            try:
+                with open(bookmarks_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+                
+        # Update the index for the current book
+        data[self.current_file_path] = self.current_paragraph_index
+        
+        # Write it back to the drive
+        with open(bookmarks_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+                
+        # Update the index for the current book
+        data[self.current_file_path] = self.current_paragraph_index
+        
+        # Write it back to the drive
+        with open(bookmarks_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+
     def load_book_dialog(self):
         # Upgrade the filter to accept EPUBs alongside TXT files
         file_path, _ = QFileDialog.getOpenFileName(
@@ -299,8 +345,16 @@ class AudiobookUI(QMainWindow):
                     self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
                     return
 
-                # Boot up the engine!
-                self.play_from_index(0)
+                # --- NEW BOOKMARK LOGIC ---
+                self.current_file_path = file_path # Save the path to the class state
+                saved_index = self.get_bookmark(file_path)
+                
+                # Safety check: if the file changed and is now shorter, reset to 0
+                if saved_index >= len(self.book_paragraphs):
+                    saved_index = 0
+
+                # Boot up the engine at the saved index!
+                self.play_from_index(saved_index)
                 
             except Exception as e:
                 self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {e}</p>")
@@ -338,6 +392,9 @@ class AudiobookUI(QMainWindow):
 
     def update_reader_box(self, index, text):
         self.current_paragraph_index = index 
+        
+        # --- NEW: Save progress instantly ---
+        self.save_bookmark() 
         
         # 1. Grab the scrollbar and save its current position
         scrollbar = self.reader_box.verticalScrollBar()
