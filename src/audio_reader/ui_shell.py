@@ -579,8 +579,22 @@ class AudiobookUI(QMainWindow):
             return
 
         if hasattr(self, 'engine_thread') and self.engine_thread.isRunning():
+            # 1. Flag the loop to stop
             self.engine_thread.is_running = False
-            self.engine_thread.wait() 
+            
+            # 2. Tell the thread event loop to exit
+            self.engine_thread.quit() 
+            
+            # 3. FORCE STOP YOUR AUDIO LIBRARY HERE
+            # If you are using pygame, uncomment the line below:
+            # pygame.mixer.music.stop() 
+            # (If you are using a different library like VLC or playsound, use its stop command here)
+
+            # 4. Wait for a maximum of 500 milliseconds (prevents UI throttling)
+            if not self.engine_thread.wait(500):
+                # 5. If it's stubbornly stuck on a massive EPUB paragraph, force kill it
+                self.engine_thread.terminate()
+                self.engine_thread.wait()
 
         # Sweep folder so skips don't leave zombie audio files
         for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
@@ -589,14 +603,15 @@ class AudiobookUI(QMainWindow):
             except OSError:
                 pass
 
-        # --- UPDATE: Grab both Speed and Voice ---
+        # Grab both Speed and Voice 
         selected_speed = self.speed_combo.currentText()
         selected_voice = self.voice_combo.currentText() 
         
+        # Boot the new thread
         self.engine_thread = AudioEngineThread(
             self.book_paragraphs, 
             start_index=index,
-            voice=selected_voice, # <--- Pass it to the thread here
+            voice=selected_voice,
             speed=selected_speed
         )
         self.engine_thread.paragraph_changed.connect(self.update_reader_box)
