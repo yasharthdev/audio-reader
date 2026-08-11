@@ -10,8 +10,8 @@ import json
 from audio_reader.epub_parser import get_epub_paragraphs
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
-                             QFileDialog, QComboBox)
-from PyQt6.QtCore import QThread, pyqtSignal
+                             QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget)
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 pygame.mixer.init()
 
@@ -225,85 +225,99 @@ class AudiobookUI(QMainWindow):
         self.setWindowTitle("AI Audiobook & Notes Environment")
         self.resize(1000, 600)
 
-        # Track full book state
         self.book_paragraphs = []
         self.current_paragraph_index = 0
         self.current_file_path = None
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
+        # --- NEW: QSplitter for draggable/collapsible panels ---
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.setCentralWidget(self.main_splitter)
 
-        # --- Left Panel (Reader) ---
-        left_panel = QVBoxLayout()
+        # --- Left Panel (Reader & Controls) ---
+        self.left_widget = QWidget()
+        left_panel = QVBoxLayout(self.left_widget)
+        
         self.reader_box = QTextEdit()
         self.reader_box.setReadOnly(True)
         self.reader_box.setStyleSheet("font-size: 18px;") 
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt or .epub file.</p>")
         
-        # --- Button Layout & Controls ---
         button_layout = QHBoxLayout()
-        
         self.load_button = QPushButton("Load Book")
         
         self.voice_combo = QComboBox()
         self.voice_combo.addItems([
-            # --- US Voices ---
-            "en-US-BrianNeural",   # Approachable, Sincere Male (Default)
-            "en-US-AriaNeural",    # Positive, Confident Female
-            "en-US-GuyNeural",     # Passionate, News-style Male
-            "en-US-JennyNeural",   # Friendly, General Female
-            
-            # --- UK Voices ---
-            "en-GB-RyanNeural",    # Professional UK Male
-            "en-GB-SoniaNeural",   # Clear, Cheerful UK Female
-            "en-GB-ThomasNeural",  # Calm, Measured UK Male
-            
-            # --- Australian Voices ---
-            "en-AU-NatashaNeural", # Crisp Australian Female
-            "en-AU-WilliamNeural"  # Authoritative Australian Male
+            "en-US-BrianNeural", "en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural",
+            "en-GB-RyanNeural", "en-GB-SoniaNeural", "en-GB-ThomasNeural",
+            "en-AU-NatashaNeural", "en-AU-WilliamNeural"
         ])
-        self.voice_combo.setCurrentText("en-US-BrianNeural")
         
         self.speed_combo = QComboBox()
         self.speed_combo.addItems(["+0%", "+50%", "+100%", "+150%", "+200%", "+250%", "+300%"])
-        self.speed_combo.setCurrentText("+0%") 
         
         self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
         self.next_button = QPushButton("Next >>")
         
-        # Add them to the layout in order EXACTLY ONCE
+        # NEW: Button to collapse the right panel
+        self.toggle_panel_btn = QPushButton("Toggle Sidebar") 
+        
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.next_button)
+        button_layout.addWidget(self.toggle_panel_btn)
         
         left_panel.addWidget(self.reader_box)
         left_panel.addLayout(button_layout)
 
-        # --- Right Panel (Notes) ---
-        right_panel = QVBoxLayout()
+        # --- Right Panel (Tabs: Notes & Bookmarks) ---
+        self.right_widget = QWidget()
+        right_panel = QVBoxLayout(self.right_widget)
+        
+        self.right_tabs = QTabWidget()
+        
+        # Tab 1: Notes
         self.notes_box = QTextEdit()
         self.notes_box.setPlaceholderText("Start typing your timestamped notes here...")
-        right_panel.addWidget(self.notes_box)
+        self.right_tabs.addTab(self.notes_box, "Notes")
+        
+        # Tab 2: Bookmarks
+        self.bookmarks_tab = QWidget()
+        bookmarks_layout = QVBoxLayout(self.bookmarks_tab)
+        self.bookmarks_list = QListWidget()
+        self.add_bookmark_btn = QPushButton("Bookmark Current Paragraph")
+        bookmarks_layout.addWidget(self.bookmarks_list)
+        bookmarks_layout.addWidget(self.add_bookmark_btn)
+        self.right_tabs.addTab(self.bookmarks_tab, "Bookmarks")
+        
+        right_panel.addWidget(self.right_tabs)
 
-        main_layout.addLayout(left_panel)
-        main_layout.addLayout(right_panel)
+        # Add both widgets to the splitter
+        self.main_splitter.addWidget(self.left_widget)
+        self.main_splitter.addWidget(self.right_widget)
+        
+        # Set default split size (e.g., 60% Left, 40% Right)
+        self.main_splitter.setSizes([600, 400])
 
         # --- Signal Connections ---
         self.load_button.clicked.connect(self.load_book_dialog)
         self.play_button.clicked.connect(self.toggle_pause)
         self.next_button.clicked.connect(self.skip_next)
         self.prev_button.clicked.connect(self.skip_prev)
+        self.toggle_panel_btn.clicked.connect(self.toggle_sidebar) # New connection
         
-        # --- UX UPGRADE: Auto-restart current paragraph on setting change ---
         self.voice_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
         self.speed_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
         
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
+
+    def toggle_sidebar(self):
+        """Shows or hides the right-hand panel."""
+        is_visible = self.right_widget.isVisible()
+        self.right_widget.setVisible(not is_visible)
 
     def get_bookmark(self, file_path):
         """Reads the JSON database and returns the saved paragraph index."""
