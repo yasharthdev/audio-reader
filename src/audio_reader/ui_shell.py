@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
                              QInputDialog, QListWidgetItem)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtGui import QKeySequence, QShortcut
 
 pygame.mixer.init()
 
@@ -319,6 +320,10 @@ class AudiobookUI(QMainWindow):
         self.add_bookmark_btn.clicked.connect(self.create_explicit_bookmark)
         self.bookmarks_list.itemDoubleClicked.connect(self.jump_to_bookmark)
 
+        # --- Highlight Shortcut (Updated to Ctrl+Shift+H to avoid macOS conflicts) ---
+        self.highlight_shortcut = QShortcut(QKeySequence("Ctrl+Shift+H"), self)
+        self.highlight_shortcut.activated.connect(self.capture_highlight)
+
     def toggle_sidebar(self):
         """Shows or hides the right-hand panel."""
         is_visible = self.right_widget.isVisible()
@@ -344,6 +349,33 @@ class AudiobookUI(QMainWindow):
             return book_data.get("last_played", 0)
         except Exception:
             return 0
+
+    def capture_highlight(self):
+        """Grabs highlighted text, formats as Markdown, and appends to notes."""
+        # 1. Grab the cursor specifically from the reader_box
+        cursor = self.reader_box.textCursor()
+        
+        # 2. If nothing is selected, do nothing
+        if not cursor.hasSelection():
+            return
+            
+        # 3. Get the selected text
+        selected_text = cursor.selectedText()
+        
+        # 4. Clean up hidden paragraph markers that occasionally sneak in from QTextEdit
+        selected_text = selected_text.replace('\u2029', ' ')
+        
+        # 5. Format as Markdown quote
+        timestamp_context = f"\n**[Paragraph {self.current_paragraph_index + 1}]**"
+        markdown_quote = f"> {selected_text}\n\n"
+        
+        # 6. Switch UI to Notes tab
+        self.right_tabs.setCurrentWidget(self.notes_box)
+        
+        # 7. Append and focus
+        self.notes_box.append(timestamp_context)
+        self.notes_box.append(markdown_quote)
+        self.notes_box.setFocus()
 
     def save_bookmark(self):
         """Saves the auto-resume paragraph index to the JSON database."""
