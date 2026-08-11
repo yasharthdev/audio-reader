@@ -11,7 +11,7 @@ from audio_reader.epub_parser import get_epub_paragraphs
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
-                             QInputDialog, QListWidgetItem)
+                             QInputDialog, QListWidgetItem, QMessageBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 
@@ -250,7 +250,7 @@ class AudiobookUI(QMainWindow):
         self.voice_combo = QComboBox()
         self.voice_combo.addItems([
             "en-US-BrianNeural", "en-US-AriaNeural", "en-US-SteffanNeural", "en-US-EmmaNeural",
-            "en-US-AndrewMultilingualNeural", "en-GB-SoniaNeural", "en-GB-ThomasNeural",
+            "en-US-AndrewNeural", "en-GB-SoniaNeural", "en-GB-ThomasNeural",
             "en-AU-NatashaNeural", "en-AU-WilliamNeural"
         ])
         
@@ -306,7 +306,7 @@ class AudiobookUI(QMainWindow):
         bookmarks_layout.addWidget(self.bookmarks_list)
         
         self.add_bookmark_btn = QPushButton("Bookmark Current Paragraph")
-        self.delete_bookmark_btn = QPushButton("Delete Selected Bookmark") # NEW
+        self.delete_bookmark_btn = QPushButton("Delete Selected Bookmark") 
         
         bookmarks_layout.addWidget(self.add_bookmark_btn)
         bookmarks_layout.addWidget(self.delete_bookmark_btn)
@@ -431,18 +431,16 @@ class AudiobookUI(QMainWindow):
         self.notes_box.setFocus()
 
     def export_to_obsidian(self):
-        """Grabs all text from the notes box and saves it as a .md file."""
+        """Grabs all text from the notes box and saves it as a .md file. Returns True if saved."""
         notes_content = self.notes_box.toPlainText()
         if not notes_content.strip():
-            return # Don't export empty notes
+            return True # If it's empty, we consider it "safe" to proceed
             
-        # Generate a clean default filename based on the book
         default_name = "audiobook_notes.md"
         if self.current_file_path:
             base_name = os.path.basename(self.current_file_path).split('.')[0]
             default_name = f"{base_name}_notes.md"
             
-        # Pop open a native save dialog
         save_path, _ = QFileDialog.getSaveFileName(
             self, 
             "Export to Obsidian", 
@@ -453,6 +451,9 @@ class AudiobookUI(QMainWindow):
         if save_path:
             with open(save_path, 'w', encoding='utf-8') as f:
                 f.write(notes_content)
+            return True
+            
+        return False # The user canceled the save dialog
 
     def save_bookmark(self):
         """Saves the auto-resume paragraph index to the JSON database."""
@@ -633,18 +634,47 @@ class AudiobookUI(QMainWindow):
             self.engine_thread.is_paused = not self.engine_thread.is_paused
 
     def closeEvent(self, event):
-        if hasattr(self, 'engine_thread'):
-            self.engine_thread.is_running = False
-            self.engine_thread.quit()
-            self.engine_thread.wait()
-            
-        for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
-            try:
-                os.remove(file)
-            except OSError:
-                pass
+        """Intercepts shutdown to check for unsaved notes, then cleans up background threads."""
+        # --- 1. Check for unsaved notes first ---
+        notes_content = self.notes_box.toPlainText().strip()
+        proceed_to_close = True
+        
+        if notes_content:
+            reply = QMessageBox.question(
+                self, 
+                'Unsaved Notes Detected',
+                'You have text in your Notes panel. Do you want to export it before exiting?',
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save
+            )
+
+            if reply == QMessageBox.StandardButton.Save:
+                # If they cancel the file browser, stop the shutdown
+                if not self.export_to_obsidian():
+                    proceed_to_close = False 
+            elif reply == QMessageBox.StandardButton.Cancel:
+                # If they cancel the warning box, stop the shutdown
+                proceed_to_close = False
+
+        # --- 2. Execute background cleanup ONLY if we are proceeding ---
+        if proceed_to_close:
+            # Kill the audio engine
+            if hasattr(self, 'engine_thread'):
+                self.engine_thread.is_running = False
+                self.engine_thread.quit()
+                self.engine_thread.wait()
                 
-        event.accept()
+            # Sweep the temporary audio files
+            for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
+                try:
+                    os.remove(file)
+                except OSError:
+                    pass
+                    
+            event.accept()
+        else:
+            # Abort the shutdown, go back to the app
+            event.ignore()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
