@@ -234,24 +234,48 @@ class AudiobookUI(QMainWindow):
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
 
+        # --- Left Panel (Reader) ---
         left_panel = QVBoxLayout()
         self.reader_box = QTextEdit()
         self.reader_box.setReadOnly(True)
         self.reader_box.setStyleSheet("font-size: 18px;") 
+        self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt or .epub file.</p>")
         
+        # --- Button Layout & Controls ---
         button_layout = QHBoxLayout()
-        self.load_button = QPushButton("Load Book (.txt)")
+        
+        self.load_button = QPushButton("Load Book")
+        
+        self.voice_combo = QComboBox()
+        self.voice_combo.addItems([
+            # --- US Voices ---
+            "en-US-BrianNeural",   # Approachable, Sincere Male (Default)
+            "en-US-AriaNeural",    # Positive, Confident Female
+            "en-US-GuyNeural",     # Passionate, News-style Male
+            "en-US-JennyNeural",   # Friendly, General Female
+            
+            # --- UK Voices ---
+            "en-GB-RyanNeural",    # Professional UK Male
+            "en-GB-SoniaNeural",   # Clear, Cheerful UK Female
+            "en-GB-ThomasNeural",  # Calm, Measured UK Male
+            
+            # --- Australian Voices ---
+            "en-AU-NatashaNeural", # Crisp Australian Female
+            "en-AU-WilliamNeural"  # Authoritative Australian Male
+        ])
+        self.voice_combo.setCurrentText("en-US-BrianNeural")
         
         self.speed_combo = QComboBox()
         self.speed_combo.addItems(["+0%", "+50%", "+100%", "+150%", "+200%", "+250%", "+300%"])
         self.speed_combo.setCurrentText("+0%") 
         
-        # New Navigation Buttons!
         self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
         self.next_button = QPushButton("Next >>")
         
+        # Add them to the layout in order EXACTLY ONCE
         button_layout.addWidget(self.load_button)
+        button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
@@ -260,6 +284,7 @@ class AudiobookUI(QMainWindow):
         left_panel.addWidget(self.reader_box)
         left_panel.addLayout(button_layout)
 
+        # --- Right Panel (Notes) ---
         right_panel = QVBoxLayout()
         self.notes_box = QTextEdit()
         self.notes_box.setPlaceholderText("Start typing your timestamped notes here...")
@@ -268,10 +293,15 @@ class AudiobookUI(QMainWindow):
         main_layout.addLayout(left_panel)
         main_layout.addLayout(right_panel)
 
+        # --- Signal Connections ---
         self.load_button.clicked.connect(self.load_book_dialog)
         self.play_button.clicked.connect(self.toggle_pause)
         self.next_button.clicked.connect(self.skip_next)
         self.prev_button.clicked.connect(self.skip_prev)
+        
+        # --- UX UPGRADE: Auto-restart current paragraph on setting change ---
+        self.voice_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
+        self.speed_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
         
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
@@ -375,10 +405,14 @@ class AudiobookUI(QMainWindow):
             except OSError:
                 pass
 
+        # --- UPDATE: Grab both Speed and Voice ---
         selected_speed = self.speed_combo.currentText()
+        selected_voice = self.voice_combo.currentText() 
+        
         self.engine_thread = AudioEngineThread(
             self.book_paragraphs, 
-            start_index=index, 
+            start_index=index,
+            voice=selected_voice, # <--- Pass it to the thread here
             speed=selected_speed
         )
         self.engine_thread.paragraph_changed.connect(self.update_reader_box)
