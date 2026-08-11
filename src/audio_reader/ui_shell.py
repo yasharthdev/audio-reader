@@ -195,7 +195,7 @@ class AudioEngineThread(QThread):
                                 
                                 html_text = (
                                     para[:start_idx] + 
-                                    "<span style='background-color: green;'>" + 
+                                    "<span style='background-color: red;'>" + 
                                     para[start_idx:end_idx] + 
                                     "</span>" + 
                                     para[end_idx:]
@@ -255,7 +255,11 @@ class AudiobookUI(QMainWindow):
         ])
         
         self.speed_combo = QComboBox()
-        self.speed_combo.addItems(["+0%", "+50%", "+100%", "+150%", "+200%", "+250%", "+300%"])
+        # Clean UI multipliers
+        self.speed_combo.addItems([
+            "1x", "1.25x", "1.5x", "1.75x", "2x", "2.25x", "2.5x", "3x"
+        ])
+        self.speed_combo.setCurrentText("1x")
         
         self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
@@ -603,16 +607,29 @@ class AudiobookUI(QMainWindow):
             except OSError:
                 pass
 
-        # Grab both Speed and Voice 
-        selected_speed = self.speed_combo.currentText()
+        # Grab both Speed and Voice from UI
+        ui_speed = self.speed_combo.currentText()
         selected_voice = self.voice_combo.currentText() 
+        
+        # --- NEW: Translate UI multiplier to Edge-TTS percentage ---
+        speed_map = {
+            "1x": "+0%",
+            "1.25x": "+25%",
+            "1.5x": "+50%",
+            "1.75x": "+75%",
+            "2x": "+100%",
+            "2.25x": "+125%",
+            "2.5x": "+150%",
+            "3x": "+200%"
+        }
+        edge_speed = speed_map.get(ui_speed, "+0%") # Fallback to +0% just in case
         
         # Boot the new thread
         self.engine_thread = AudioEngineThread(
             self.book_paragraphs, 
             start_index=index,
             voice=selected_voice,
-            speed=selected_speed
+            speed=edge_speed # Pass the translated percentage to the backend
         )
         self.engine_thread.paragraph_changed.connect(self.update_reader_box)
         self.engine_thread.start()
