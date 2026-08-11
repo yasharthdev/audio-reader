@@ -10,7 +10,8 @@ import json
 from audio_reader.epub_parser import get_epub_paragraphs
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
-                             QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget)
+                             QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
+                             QInputDialog, QListWidgetItem)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 
 pygame.mixer.init()
@@ -247,8 +248,8 @@ class AudiobookUI(QMainWindow):
         
         self.voice_combo = QComboBox()
         self.voice_combo.addItems([
-            "en-US-BrianNeural", "en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural",
-            "en-GB-RyanNeural", "en-GB-SoniaNeural", "en-GB-ThomasNeural",
+            "en-US-BrianNeural", "en-US-AriaNeural", "en-US-SteffanNeural", "en-US-EmmaNeural",
+            "en-US-AndrewMultilingualNeural", "en-GB-SoniaNeural", "en-GB-ThomasNeural",
             "en-AU-NatashaNeural", "en-AU-WilliamNeural"
         ])
         
@@ -314,13 +315,17 @@ class AudiobookUI(QMainWindow):
         
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
+        # --- Bookmark Connections ---
+        self.add_bookmark_btn.clicked.connect(self.create_explicit_bookmark)
+        self.bookmarks_list.itemDoubleClicked.connect(self.jump_to_bookmark)
+
     def toggle_sidebar(self):
         """Shows or hides the right-hand panel."""
         is_visible = self.right_widget.isVisible()
         self.right_widget.setVisible(not is_visible)
 
     def get_bookmark(self, file_path):
-        """Reads the JSON database and returns the saved paragraph index."""
+        """Reads the JSON database and returns the auto-resume paragraph index."""
         bookmarks_file = "bookmarks.json"
         if not os.path.exists(bookmarks_file):
             return 0
@@ -328,20 +333,26 @@ class AudiobookUI(QMainWindow):
         try:
             with open(bookmarks_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            return data.get(file_path, 0)
+            
+            book_data = data.get(file_path, 0)
+            
+            # Backwards compatibility for v1 schema
+            if isinstance(book_data, int):
+                return book_data
+                
+            # v2 schema: grab the auto-resume index
+            return book_data.get("last_played", 0)
         except Exception:
-            return 0 # If the JSON is corrupted, default to the start
+            return 0
 
     def save_bookmark(self):
-        """Saves the current file and paragraph index to the JSON database."""
-        # Clean, simple check now that the variable is officially declared
+        """Saves the auto-resume paragraph index to the JSON database."""
         if not self.current_file_path:
             return
             
         bookmarks_file = "bookmarks.json"
         data = {}
         
-        # Load existing bookmarks so we don't overwrite other books
         if os.path.exists(bookmarks_file):
             try:
                 with open(bookmarks_file, 'r', encoding='utf-8') as f:
@@ -349,19 +360,65 @@ class AudiobookUI(QMainWindow):
             except Exception:
                 pass
                 
-        # Update the index for the current book
-        data[self.current_file_path] = self.current_paragraph_index
+        # Upgrade schema if this book was saved using the old format, or is new
+        if self.current_file_path not in data or isinstance(data.get(self.current_file_path), int):
+            data[self.current_file_path] = {"last_played": 0, "bookmarks": []}
+            
+        # Only update the last_played tracker; leave explicit bookmarks untouched
+        data[self.current_file_path]["last_played"] = self.current_paragraph_index
         
-        # Write it back to the drive
         with open(bookmarks_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
+
+    def create_explicit_bookmark(self):
+        """Prompts the user for a name and saves the current index as a hard bookmark."""
+        if not self.current_file_path:
+            return
+            
+        name, ok = QInputDialog.getText(self, "New Bookmark", "Enter a name for this bookmark:")
+        
+        if ok and name:
+            bookmarks_file = "bookmarks.json"
+            data = {}
+            if os.path.exists(bookmarks_file):
+                with open(bookmarks_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    
+            if self.current_file_path not in data or isinstance(data.get(self.current_file_path), int):
+                data[self.current_file_path] = {"last_played": self.current_paragraph_index, "bookmarks": []}
                 
-        # Update the index for the current book
-        data[self.current_file_path] = self.current_paragraph_index
-        
-        # Write it back to the drive
-        with open(bookmarks_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
+            # Append the new bookmark to the array
+            new_bookmark = {"name": name, "index": self.current_paragraph_index}
+            data[self.current_file_path]["bookmarks"].append(new_bookmark)
+            
+            with open(bookmarks_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+                
+            self.refresh_bookmarks_ui()
+
+    def refresh_bookmarks_ui(self):
+        """Clears and reloads the bookmark list widget from the JSON database."""
+        self.bookmarks_list.clear()
+        if not self.current_file_path:
+            return
+            
+        bookmarks_file = "bookmarks.json"
+        if os.path.exists(bookmarks_file):
+            with open(bookmarks_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+            book_data = data.get(self.current_file_path, {})
+            if isinstance(book_data, dict):
+                for bm in book_data.get("bookmarks", []):
+                    # Display the name, but hide the raw index inside the item's UserData
+                    item = QListWidgetItem(f"{bm['name']} (Para {bm['index'] + 1})")
+                    item.setData(Qt.ItemDataRole.UserRole, bm['index'])
+                    self.bookmarks_list.addItem(item)
+
+    def jump_to_bookmark(self, item):
+        """Triggers when a user double-clicks a bookmark in the list."""
+        index = item.data(Qt.ItemDataRole.UserRole)
+        self.play_from_index(index)
 
     def load_book_dialog(self):
         # Upgrade the filter to accept EPUBs alongside TXT files
@@ -399,6 +456,9 @@ class AudiobookUI(QMainWindow):
 
                 # Boot up the engine at the saved index!
                 self.play_from_index(saved_index)
+
+                # Populate the Bookmarks tab
+                self.refresh_bookmarks_ui()
                 
             except Exception as e:
                 self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {e}</p>")

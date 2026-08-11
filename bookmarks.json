@@ -1,4 +1,24 @@
 {
-    "/Users/yasharthsaxena/workspace/yash/personal_projects/audio_reader/books/lohn.txt": 1,
-    "/Users/yasharthsaxena/workspace/yash/personal_projects/audio_reader/books/animal_farm.epub": 10
+    "/Users/yasharthsaxena/workspace/yash/personal_projects/audio_reader/books/lohn.txt": {
+        "last_played": 5,
+        "bookmarks": [
+            {
+                "name": "mineralogist",
+                "index": 1
+            },
+            {
+                "name": "what's come over us?",
+                "index": 5
+            }
+        ]
+    },
+    "/Users/yasharthsaxena/workspace/yash/personal_projects/audio_reader/books/animal_farm.epub": {
+        "last_played": 10,
+        "bookmarks": [
+            {
+                "name": "Introduction",
+                "index": 10
+            }
+        ]
+    }
 }
