@@ -281,18 +281,36 @@ class AudiobookUI(QMainWindow):
         
         self.right_tabs = QTabWidget()
         
-        # Tab 1: Notes
+        # --- Tab 1: Notes ---
+        self.notes_tab = QWidget()
+        notes_layout = QVBoxLayout(self.notes_tab)
+        
         self.notes_box = QTextEdit()
         self.notes_box.setPlaceholderText("Start typing your timestamped notes here...")
-        self.right_tabs.addTab(self.notes_box, "Notes")
+        notes_layout.addWidget(self.notes_box)
         
-        # Tab 2: Bookmarks
+        notes_btn_layout = QHBoxLayout()
+        self.clear_notes_btn = QPushButton("Clear All Notes")
+        self.export_notes_btn = QPushButton("Export to Obsidian (.md)")
+        notes_btn_layout.addWidget(self.clear_notes_btn)
+        notes_btn_layout.addWidget(self.export_notes_btn)
+        notes_layout.addLayout(notes_btn_layout)
+        
+        self.right_tabs.addTab(self.notes_tab, "Notes")
+        
+        # --- Tab 2: Bookmarks ---
         self.bookmarks_tab = QWidget()
         bookmarks_layout = QVBoxLayout(self.bookmarks_tab)
+        
         self.bookmarks_list = QListWidget()
-        self.add_bookmark_btn = QPushButton("Bookmark Current Paragraph")
         bookmarks_layout.addWidget(self.bookmarks_list)
+        
+        self.add_bookmark_btn = QPushButton("Bookmark Current Paragraph")
+        self.delete_bookmark_btn = QPushButton("Delete Selected Bookmark") # NEW
+        
         bookmarks_layout.addWidget(self.add_bookmark_btn)
+        bookmarks_layout.addWidget(self.delete_bookmark_btn)
+        
         self.right_tabs.addTab(self.bookmarks_tab, "Bookmarks")
         
         right_panel.addWidget(self.right_tabs)
@@ -313,8 +331,6 @@ class AudiobookUI(QMainWindow):
         
         self.voice_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
         self.speed_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
-        
-        self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
         # --- Bookmark Connections ---
         self.add_bookmark_btn.clicked.connect(self.create_explicit_bookmark)
@@ -323,6 +339,13 @@ class AudiobookUI(QMainWindow):
         # --- Highlight Shortcut (Updated to Ctrl+Shift+H to avoid macOS conflicts) ---
         self.highlight_shortcut = QShortcut(QKeySequence("Ctrl+Shift+H"), self)
         self.highlight_shortcut.activated.connect(self.capture_highlight)
+
+        # --- Note & Export Connections ---
+        self.clear_notes_btn.clicked.connect(self.notes_box.clear)
+        self.export_notes_btn.clicked.connect(self.export_to_obsidian)
+        self.delete_bookmark_btn.clicked.connect(self.delete_bookmark)
+
+        self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
 
     def toggle_sidebar(self):
         """Shows or hides the right-hand panel."""
@@ -350,6 +373,36 @@ class AudiobookUI(QMainWindow):
         except Exception:
             return 0
 
+    def delete_bookmark(self):
+        """Removes the selected bookmark from both the UI and the JSON database."""
+        selected_items = self.bookmarks_list.selectedItems()
+        if not selected_items:
+            return
+            
+        item = selected_items[0]
+        target_index = item.data(Qt.ItemDataRole.UserRole)
+        
+        # 1. Remove from JSON file
+        if self.current_file_path:
+            bookmarks_file = "bookmarks.json"
+            if os.path.exists(bookmarks_file):
+                with open(bookmarks_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                if self.current_file_path in data:
+                    # Filter out the bookmark with the matching index
+                    bookmarks = data[self.current_file_path].get("bookmarks", [])
+                    data[self.current_file_path]["bookmarks"] = [
+                        bm for bm in bookmarks if bm["index"] != target_index
+                    ]
+                    
+                    # Write the cleaned array back to the drive
+                    with open(bookmarks_file, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=4)
+                        
+        # 2. Remove from UI list
+        self.bookmarks_list.takeItem(self.bookmarks_list.row(item))
+
     def capture_highlight(self):
         """Grabs highlighted text, formats as Markdown, and appends to notes."""
         # 1. Grab the cursor specifically from the reader_box
@@ -376,6 +429,30 @@ class AudiobookUI(QMainWindow):
         self.notes_box.append(timestamp_context)
         self.notes_box.append(markdown_quote)
         self.notes_box.setFocus()
+
+    def export_to_obsidian(self):
+        """Grabs all text from the notes box and saves it as a .md file."""
+        notes_content = self.notes_box.toPlainText()
+        if not notes_content.strip():
+            return # Don't export empty notes
+            
+        # Generate a clean default filename based on the book
+        default_name = "audiobook_notes.md"
+        if self.current_file_path:
+            base_name = os.path.basename(self.current_file_path).split('.')[0]
+            default_name = f"{base_name}_notes.md"
+            
+        # Pop open a native save dialog
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, 
+            "Export to Obsidian", 
+            default_name, 
+            "Markdown Files (*.md)"
+        )
+        
+        if save_path:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                f.write(notes_content)
 
     def save_bookmark(self):
         """Saves the auto-resume paragraph index to the JSON database."""
