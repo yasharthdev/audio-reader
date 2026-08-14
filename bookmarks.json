@@ -1,10 +1,18 @@
 {
     "/Users/yasharthsaxena/workspace/yash/personal_projects/audio_reader/books/lohn.txt": {
-        "last_played": 2,
+        "last_played": 31,
         "bookmarks": [
             {
                 "name": "mineralogist",
                 "index": 1
+            },
+            {
+                "name": "Once this primal...",
+                "index": 18
+            },
+            {
+                "name": "Something2",
+                "index": 29
             }
         ]
     },
@@ -16,5 +24,9 @@
                 "index": 10
             }
         ]
+    },
+    "/Users/yasharthsaxena/Desktop/Books/Robert Greene - The Laws of Human Nature-VIKING (2018).epub": {
+        "last_played": 10,
+        "bookmarks": []
     }
 }

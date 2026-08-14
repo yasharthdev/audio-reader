@@ -230,6 +230,7 @@ class AudiobookUI(QMainWindow):
         self.book_paragraphs = []
         self.current_paragraph_index = 0
         self.current_file_path = None
+        self.current_font_size = 18
 
         # --- NEW: QSplitter for draggable/collapsible panels ---
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -241,7 +242,6 @@ class AudiobookUI(QMainWindow):
         
         self.reader_box = QTextEdit()
         self.reader_box.setReadOnly(True)
-        self.reader_box.setStyleSheet("font-size: 18px;") 
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt or .epub file.</p>")
         
         button_layout = QHBoxLayout()
@@ -267,6 +267,8 @@ class AudiobookUI(QMainWindow):
         
         # NEW: Button to collapse the right panel
         self.toggle_panel_btn = QPushButton("Toggle Sidebar") 
+        self.decrease_font_btn = QPushButton("A-")
+        self.increase_font_btn = QPushButton("A+")
         
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.voice_combo) 
@@ -275,6 +277,8 @@ class AudiobookUI(QMainWindow):
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.next_button)
         button_layout.addWidget(self.toggle_panel_btn)
+        button_layout.addWidget(self.decrease_font_btn)
+        button_layout.addWidget(self.increase_font_btn)
         
         left_panel.addWidget(self.reader_box)
         left_panel.addLayout(button_layout)
@@ -332,6 +336,8 @@ class AudiobookUI(QMainWindow):
         self.next_button.clicked.connect(self.skip_next)
         self.prev_button.clicked.connect(self.skip_prev)
         self.toggle_panel_btn.clicked.connect(self.toggle_sidebar) # New connection
+        self.decrease_font_btn.clicked.connect(self.decrease_font)
+        self.increase_font_btn.clicked.connect(self.increase_font)
         
         self.voice_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
         self.speed_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
@@ -350,6 +356,22 @@ class AudiobookUI(QMainWindow):
         self.delete_bookmark_btn.clicked.connect(self.delete_bookmark)
 
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
+        self.apply_font_size()
+
+    def increase_font(self):
+        self.current_font_size += 2
+        self.apply_font_size()
+
+    def decrease_font(self):
+        if self.current_font_size > 8:
+            self.current_font_size -= 2
+            self.apply_font_size()
+
+    def apply_font_size(self):
+        style = f"font-size: {self.current_font_size}px;"
+        self.reader_box.setStyleSheet(style)
+        self.notes_box.setStyleSheet(style)
+        self.bookmarks_list.setStyleSheet(style)
 
     def toggle_sidebar(self):
         """Shows or hides the right-hand panel."""
