@@ -11,3 +11,5 @@ wheels/
 .vscode/
 .DS_Store
 temp_*.mp3
+books/
+bookmarks.json
