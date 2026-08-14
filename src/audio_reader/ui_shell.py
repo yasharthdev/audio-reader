@@ -7,13 +7,13 @@ import queue
 import threading
 import pygame
 import json
-from audio_reader.epub_parser import get_epub_paragraphs
+from audio_reader.epub_parser import get_epub_paragraphs, get_epub_data
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
-                             QInputDialog, QListWidgetItem, QMessageBox)
+                             QInputDialog, QListWidgetItem, QMessageBox, QMenu)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction
 
 pygame.mixer.init()
 
@@ -218,6 +218,27 @@ class AudioEngineThread(QThread):
             self.audio_queue.task_done()
 
 
+class BookLoaderThread(QThread):
+    finished_loading = pyqtSignal(list, list)
+    error_loading = pyqtSignal(str)
+
+    def __init__(self, file_path):
+        super().__init__()
+        self.file_path = file_path
+
+    def run(self):
+        try:
+            if self.file_path.lower().endswith('.epub'):
+                paragraphs, chapter_map = get_epub_data(self.file_path)
+                self.finished_loading.emit(paragraphs, chapter_map)
+            else:
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                self.finished_loading.emit(paragraphs, [])
+        except Exception as e:
+            self.error_loading.emit(str(e))
+
 # ==========================================
 # 3. THE UI CANVAS
 # ==========================================
@@ -228,6 +249,7 @@ class AudiobookUI(QMainWindow):
         self.resize(1000, 600)
 
         self.book_paragraphs = []
+        self.chapter_map = []
         self.current_paragraph_index = 0
         self.current_file_path = None
         self.current_font_size = 18
@@ -269,6 +291,10 @@ class AudiobookUI(QMainWindow):
         self.toggle_panel_btn = QPushButton("Toggle Sidebar") 
         self.decrease_font_btn = QPushButton("A-")
         self.increase_font_btn = QPushButton("A+")
+        self.contents_btn = QPushButton("Contents")
+        self.contents_menu = QMenu(self)
+        self.contents_btn.setMenu(self.contents_menu)
+        self.contents_btn.setEnabled(False)
         
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.voice_combo) 
@@ -279,6 +305,7 @@ class AudiobookUI(QMainWindow):
         button_layout.addWidget(self.toggle_panel_btn)
         button_layout.addWidget(self.decrease_font_btn)
         button_layout.addWidget(self.increase_font_btn)
+        button_layout.addWidget(self.contents_btn)
         
         left_panel.addWidget(self.reader_box)
         left_panel.addLayout(button_layout)
@@ -566,38 +593,54 @@ class AudiobookUI(QMainWindow):
         )
         
         if file_path:
-            try:
-                # --- EPUB HANDLING ---
-                if file_path.lower().endswith('.epub'):
-                    # Call the function exactly as you named it in epub_parser.py
-                    self.book_paragraphs = get_epub_paragraphs(file_path)
-                        
-                # --- TXT HANDLING ---
-                else:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        text = f.read()
-                    self.book_paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-                
-                if not self.book_paragraphs:
-                    self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
-                    return
+            self.current_file_path = file_path # Save the path to the class state
+            
+            # Disable button and show loading text
+            self.load_button.setEnabled(False)
+            self.reader_box.setHtml("<h3>Loading...</h3><p>Please wait while the book is being parsed.</p>")
+            
+            # Start background thread
+            self.loader_thread = BookLoaderThread(file_path)
+            self.loader_thread.finished_loading.connect(self.on_book_loaded)
+            self.loader_thread.error_loading.connect(self.on_book_load_error)
+            self.loader_thread.start()
 
-                # --- NEW BOOKMARK LOGIC ---
-                self.current_file_path = file_path # Save the path to the class state
-                saved_index = self.get_bookmark(file_path)
-                
-                # Safety check: if the file changed and is now shorter, reset to 0
-                if saved_index >= len(self.book_paragraphs):
-                    saved_index = 0
+    def on_book_loaded(self, paragraphs, chapter_map):
+        self.load_button.setEnabled(True)
+        self.book_paragraphs = paragraphs
+        self.chapter_map = chapter_map
+        
+        if not self.book_paragraphs:
+            self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
+            return
 
-                # Boot up the engine at the saved index!
-                self.play_from_index(saved_index)
+        # Populate the Contents menu
+        self.contents_menu.clear()
+        if self.chapter_map:
+            for chapter in self.chapter_map:
+                action = QAction(chapter['title'], self)
+                action.triggered.connect(lambda checked, idx=chapter['start_index']: self.play_from_index(idx))
+                self.contents_menu.addAction(action)
+            self.contents_btn.setEnabled(True)
+        else:
+            self.contents_btn.setEnabled(False)
 
-                # Populate the Bookmarks tab
-                self.refresh_bookmarks_ui()
-                
-            except Exception as e:
-                self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {e}</p>")
+        # --- NEW BOOKMARK LOGIC ---
+        saved_index = self.get_bookmark(self.current_file_path)
+        
+        # Safety check: if the file changed and is now shorter, reset to 0
+        if saved_index >= len(self.book_paragraphs):
+            saved_index = 0
+
+        # Boot up the engine at the saved index!
+        self.play_from_index(saved_index)
+
+        # Populate the Bookmarks tab
+        self.refresh_bookmarks_ui()
+
+    def on_book_load_error(self, error_msg):
+        self.load_button.setEnabled(True)
+        self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {error_msg}</p>")
 
     def play_from_index(self, index):
         """Kills current thread, cleans up, and boots a new one at the target index."""
@@ -662,6 +705,18 @@ class AudiobookUI(QMainWindow):
     def skip_prev(self):
         self.play_from_index(self.current_paragraph_index - 1)
 
+    def get_active_chapter(self, index):
+        if not self.chapter_map:
+            return f"Paragraph {index + 1} of {len(self.book_paragraphs)}"
+        
+        current_chapter = self.chapter_map[0]['title'] if self.chapter_map else f"Paragraph {index + 1}"
+        for chapter in self.chapter_map:
+            if chapter['start_index'] <= index:
+                current_chapter = chapter['title']
+            else:
+                break
+        return current_chapter
+
     def update_reader_box(self, index, text):
         self.current_paragraph_index = index 
         
@@ -677,7 +732,8 @@ class AudiobookUI(QMainWindow):
             current_scroll = scrollbar.value()
         
         # 2. Update the text (which automatically resets the scroll to 0)
-        self.reader_box.setHtml(f"<h3>Paragraph {index + 1} of {len(self.book_paragraphs)}:</h3><p>{text}</p>")
+        header_text = self.get_active_chapter(index)
+        self.reader_box.setHtml(f"<h3>{header_text}</h3><p>{text}</p>")
         
         # 3. Instantly snap the scrollbar back to where you left it
         if scrollbar is not None:
