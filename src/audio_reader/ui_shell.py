@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
                              QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton,
-                             QDialog, QFormLayout, QSpinBox, QDialogButtonBox)
+                             QDialog, QFormLayout, QSpinBox, QDialogButtonBox, QSizePolicy)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
 from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction, QColor, QTextCursor
 
@@ -23,9 +23,9 @@ QMainWindow, QWidget { background-color: #F8F9FA; color: #2B2D42; }
 QLabel { color: #2B2D42; background: transparent; }
 QToolBar { background-color: #FFFFFF; border-bottom: 1px solid #E5E7EB; }
 QTextEdit, QListWidget { background-color: #FFFFFF; color: #2B2D42; padding: 24px 32px; border: none; }
-QPushButton, QToolButton { background-color: #1E293B; color: #FFFFFF; border-radius: 8px; padding: 6px 24px; min-width: 32px; border: none; }
+QPushButton, QToolButton { background-color: #1E293B; color: #FFFFFF; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; border: none; }
 QPushButton:hover, QToolButton:hover { background-color: #334155; }
-QComboBox { background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 8px; padding: 4px 16px; min-height: 24px; }
+QComboBox { background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; }
 QComboBox QAbstractItemView { background-color: #FFFFFF; color: #1E293B; selection-background-color: #E2E8F0; selection-color: #0F172A; padding: 4px 8px; }
 QMenu { background-color: #FFFFFF; color: #1E293B; border: 1px solid #E2E8F0; selection-background-color: #F1F5F9; }
 QScrollBar:vertical { width: 8px; background: transparent; margin: 0px; }
@@ -39,9 +39,9 @@ QMainWindow, QWidget { background-color: #1E1E1E; color: #E0E0E0; }
 QLabel { color: #E0E0E0; background: transparent; }
 QToolBar { background-color: #252526; border-bottom: 1px solid #333333; }
 QTextEdit, QListWidget { background-color: #1E1E1E; color: #E0E0E0; padding: 24px 32px; border: none; }
-QPushButton, QToolButton { background-color: #333333; color: #FFFFFF; border-radius: 8px; padding: 6px 24px; min-width: 32px; border: none; }
+QPushButton, QToolButton { background-color: #333333; color: #FFFFFF; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; border: none; }
 QPushButton:hover, QToolButton:hover { background-color: #444444; }
-QComboBox { background-color: #2D2D30; color: #F3F4F6; border: 1px solid #3E3E42; border-radius: 8px; padding: 4px 16px; min-height: 24px; }
+QComboBox { background-color: #2D2D30; color: #F3F4F6; border: 1px solid #3E3E42; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; }
 QComboBox QAbstractItemView { background-color: #252526; color: #F3F4F6; selection-background-color: #374151; selection-color: #FFFFFF; padding: 4px 8px; }
 QMenu { background-color: #252526; color: #F3F4F6; border: 1px solid #3E3E42; selection-background-color: #374151; }
 QScrollBar:vertical { width: 8px; background: transparent; margin: 0px; }
@@ -336,11 +336,14 @@ class AudiobookUI(QMainWindow):
         self.load_button = QPushButton("Load Book")
         
         self.voice_combo = QComboBox()
-        self.voice_combo.addItems([
+        raw_voices = [
             "en-US-BrianNeural", "en-US-AriaNeural", "en-US-SteffanNeural", "en-US-EmmaNeural",
             "en-US-AndrewNeural", "en-GB-SoniaNeural", "en-GB-ThomasNeural",
             "en-AU-NatashaNeural", "en-AU-WilliamNeural"
-        ])
+        ]
+        for voice in raw_voices:
+            display_name = voice.split('-')[-1].replace('Neural', '')
+            self.voice_combo.addItem(display_name, voice)
         
         self.speed_combo = QComboBox()
         # Clean UI multipliers
@@ -375,17 +378,32 @@ class AudiobookUI(QMainWindow):
         button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
         button_layout.addWidget(self.settings_btn)
+        
+        button_layout.addStretch()
+        
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.next_button)
+        
+        button_layout.addStretch()
+        
         button_layout.addWidget(self.toggle_panel_btn)
         button_layout.addWidget(self.contents_btn)
+        
+        # --- Enforce Size Policies ---
+        toolbar_widgets = [self.load_button, self.history_btn, self.voice_combo, 
+                           self.speed_combo, self.settings_btn, self.prev_button, 
+                           self.play_button, self.next_button, self.toggle_panel_btn, 
+                           self.contents_btn]
+        for w in toolbar_widgets:
+            w.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         
         left_panel.addWidget(self.reader_box)
         left_panel.addLayout(button_layout)
 
         # --- Right Panel (Tabs: Notes & Bookmarks) ---
         self.right_widget = QWidget()
+        self.right_widget.setMinimumWidth(340)
         right_panel = QVBoxLayout(self.right_widget)
         
         self.right_tabs = QTabWidget()
@@ -399,10 +417,20 @@ class AudiobookUI(QMainWindow):
         notes_layout.addWidget(self.notes_box)
         
         notes_btn_layout = QHBoxLayout()
+        notes_btn_layout.setSpacing(12)
         self.clear_notes_btn = QPushButton("Clear All Notes")
-        self.export_notes_btn = QPushButton("Export to Obsidian (.md)")
+        self.export_notes_btn = QPushButton("Export (.md)")
+        
+        self.clear_notes_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.export_notes_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.clear_notes_btn.setMinimumWidth(140)
+        self.export_notes_btn.setMinimumWidth(140)
+        
+        notes_btn_layout.addStretch()
         notes_btn_layout.addWidget(self.clear_notes_btn)
         notes_btn_layout.addWidget(self.export_notes_btn)
+        notes_btn_layout.addStretch()
+        
         notes_layout.addLayout(notes_btn_layout)
         
         self.right_tabs.addTab(self.notes_tab, "Notes")
@@ -856,7 +884,7 @@ class AudiobookUI(QMainWindow):
 
         # Grab both Speed and Voice from UI
         ui_speed = self.speed_combo.currentText()
-        selected_voice = self.voice_combo.currentText() 
+        selected_voice = self.voice_combo.currentData() 
         
         # --- NEW: Translate UI multiplier to Edge-TTS percentage ---
         speed_map = {
