@@ -11,11 +11,82 @@ from audio_reader.epub_parser import get_epub_paragraphs, get_epub_data
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
-                             QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton)
+                             QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton,
+                             QDialog, QFormLayout, QSpinBox, QDialogButtonBox)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
 from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction, QColor, QTextCursor
 
 pygame.mixer.init()
+
+LIGHT_THEME = """
+QMainWindow, QWidget { background-color: #F8F9FA; color: #2B2D42; }
+QLabel { color: #2B2D42; background: transparent; }
+QToolBar { background-color: #FFFFFF; border-bottom: 1px solid #E5E7EB; }
+QTextEdit, QListWidget { background-color: #FFFFFF; color: #2B2D42; padding: 24px 32px; border: none; }
+QPushButton, QToolButton { background-color: #1E293B; color: #FFFFFF; border-radius: 8px; padding: 6px 24px; min-width: 32px; border: none; }
+QPushButton:hover, QToolButton:hover { background-color: #334155; }
+QComboBox { background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 8px; padding: 4px 16px; min-height: 24px; }
+QComboBox QAbstractItemView { background-color: #FFFFFF; color: #1E293B; selection-background-color: #E2E8F0; selection-color: #0F172A; padding: 4px 8px; }
+QMenu { background-color: #FFFFFF; color: #1E293B; border: 1px solid #E2E8F0; selection-background-color: #F1F5F9; }
+QScrollBar:vertical { width: 8px; background: transparent; margin: 0px; }
+QScrollBar::handle:vertical { background: #CBD5E1; border-radius: 4px; min-height: 20px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; background: none; border: none; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+"""
+
+DARK_THEME = """
+QMainWindow, QWidget { background-color: #1E1E1E; color: #E0E0E0; }
+QLabel { color: #E0E0E0; background: transparent; }
+QToolBar { background-color: #252526; border-bottom: 1px solid #333333; }
+QTextEdit, QListWidget { background-color: #1E1E1E; color: #E0E0E0; padding: 24px 32px; border: none; }
+QPushButton, QToolButton { background-color: #333333; color: #FFFFFF; border-radius: 8px; padding: 6px 24px; min-width: 32px; border: none; }
+QPushButton:hover, QToolButton:hover { background-color: #444444; }
+QComboBox { background-color: #2D2D30; color: #F3F4F6; border: 1px solid #3E3E42; border-radius: 8px; padding: 4px 16px; min-height: 24px; }
+QComboBox QAbstractItemView { background-color: #252526; color: #F3F4F6; selection-background-color: #374151; selection-color: #FFFFFF; padding: 4px 8px; }
+QMenu { background-color: #252526; color: #F3F4F6; border: 1px solid #3E3E42; selection-background-color: #374151; }
+QScrollBar:vertical { width: 8px; background: transparent; margin: 0px; }
+QScrollBar::handle:vertical { background: #4B5563; border-radius: 4px; min-height: 20px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; background: none; border: none; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+"""
+
+class SettingsDialog(QDialog):
+    def __init__(self, settings: QSettings, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Preferences")
+        self.settings = settings
+        
+        self.layout = QFormLayout(self)
+        
+        # Font Family
+        self.font_combo = QComboBox()
+        self.font_combo.addItems(["Avenir", "Helvetica Neue", "Georgia", "Palatino", "Menlo"])
+        self.font_combo.setCurrentText(settings.value("font_family", "Avenir", type=str))
+        self.layout.addRow("Font Family:", self.font_combo)
+        
+        # Highlight Theme
+        self.highlight_combo = QComboBox()
+        self.highlight_combo.addItems(["Red", "Blue", "Green", "Purple", "Gold"])
+        self.highlight_combo.setCurrentText(settings.value("highlight_theme", "Red", type=str))
+        self.layout.addRow("Highlight Theme:", self.highlight_combo)
+        
+        # App Theme
+        self.app_theme_combo = QComboBox()
+        self.app_theme_combo.addItems(["Light", "Dark"])
+        self.app_theme_combo.setCurrentText(settings.value("ui_mode", "Light", type=str))
+        self.layout.addRow("UI Mode:", self.app_theme_combo)
+        
+        # Font Size
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(8, 72)
+        self.font_size_spin.setValue(settings.value("font_size", 16, type=int))
+        self.layout.addRow("Font Size:", self.font_size_spin)
+        
+        # Buttons
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.layout.addWidget(self.buttons)
 
 # ==========================================
 # 1. CORE ENGINE FUNCTIONS
@@ -285,17 +356,8 @@ class AudiobookUI(QMainWindow):
         self.history_btn.setMenu(self.history_menu)
         self.history_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItems(["Red", "Blue", "Green", "Purple", "Gold"])
-        saved_theme = self.settings.value("highlight_theme", "Red", type=str)
-        self.theme_combo.setCurrentText(saved_theme)
-        self.theme_combo.currentTextChanged.connect(self.on_theme_changed)
-        
-        self.font_combo = QComboBox()
-        self.font_combo.addItems(["Avenir", "Helvetica Neue", "Georgia", "Palatino", "SF Pro"])
-        saved_font_family = self.settings.value("font_family", "Avenir", type=str)
-        self.font_combo.setCurrentText(saved_font_family)
-        self.font_combo.currentTextChanged.connect(self.on_font_family_changed)
+        self.settings_btn = QPushButton("⚙️ Settings")
+        self.settings_btn.clicked.connect(self.open_settings)
         
         self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
@@ -303,8 +365,6 @@ class AudiobookUI(QMainWindow):
         
         # NEW: Button to collapse the right panel
         self.toggle_panel_btn = QPushButton("Toggle Sidebar") 
-        self.decrease_font_btn = QPushButton("A-")
-        self.increase_font_btn = QPushButton("A+")
         self.contents_btn = QPushButton("Contents")
         self.contents_menu = QMenu(self)
         self.contents_btn.setMenu(self.contents_menu)
@@ -314,14 +374,11 @@ class AudiobookUI(QMainWindow):
         button_layout.addWidget(self.history_btn)
         button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
-        button_layout.addWidget(self.theme_combo)
-        button_layout.addWidget(self.font_combo)
+        button_layout.addWidget(self.settings_btn)
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.next_button)
         button_layout.addWidget(self.toggle_panel_btn)
-        button_layout.addWidget(self.decrease_font_btn)
-        button_layout.addWidget(self.increase_font_btn)
         button_layout.addWidget(self.contents_btn)
         
         left_panel.addWidget(self.reader_box)
@@ -380,8 +437,6 @@ class AudiobookUI(QMainWindow):
         self.next_button.clicked.connect(self.skip_next)
         self.prev_button.clicked.connect(self.skip_prev)
         self.toggle_panel_btn.clicked.connect(self.toggle_sidebar) # New connection
-        self.decrease_font_btn.clicked.connect(self.decrease_font)
-        self.increase_font_btn.clicked.connect(self.increase_font)
         
         self.voice_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
         self.speed_combo.currentIndexChanged.connect(self.on_speed_changed)
@@ -413,39 +468,60 @@ class AudiobookUI(QMainWindow):
         self.bookmarks_list.setFont(notes_font)
         
         self.refresh_history_menu()
+        
+        # Apply initial UI mode
+        saved_mode = self.settings.value("ui_mode", "Light", type=str)
+        self.apply_ui_mode(saved_mode)
+        self.apply_font_settings()
+
+    def open_settings(self):
+        dialog = SettingsDialog(self.settings, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.settings.setValue("font_family", dialog.font_combo.currentText())
+            self.settings.setValue("highlight_theme", dialog.highlight_combo.currentText())
+            self.settings.setValue("ui_mode", dialog.app_theme_combo.currentText())
+            self.settings.setValue("font_size", dialog.font_size_spin.value())
+            
+            self.apply_ui_mode(dialog.app_theme_combo.currentText())
+            self.apply_font_settings()
+
+    def apply_font_settings(self):
+        font_name = self.settings.value("font_family", "Avenir", type=str)
+        target_size = self.settings.value("font_size", 16, type=int)
+        
+        current_size = self.reader_box.font().pointSize()
+        # Set family while maintaining zoom for a moment
+        self.reader_box.setFont(QFont(font_name, current_size))
+        
+        # Adjust via zoomIn/zoomOut to preserve QTextDocument scaling optimization
+        diff = target_size - current_size
+        if diff > 0:
+            self.reader_box.zoomIn(diff)
+        elif diff < 0:
+            self.reader_box.zoomOut(-diff)
+            
+        notes_size = max(int(target_size * 0.75), 9)
+        new_notes_font = QFont(font_name, notes_size)
+        self.notes_box.setFont(new_notes_font)
+        self.bookmarks_list.setFont(new_notes_font)
+
+    def apply_ui_mode(self, mode_name):
+        app = QApplication.instance()
+        if mode_name == "Light":
+            app.setStyleSheet(LIGHT_THEME)
+        else:
+            app.setStyleSheet(DARK_THEME)
+            
+        # Re-apply text highlights so they pop under the new background
+        self._apply_highlights()
 
     def get_theme_colors(self):
-        theme = self.theme_combo.currentText()
+        theme = self.settings.value("highlight_theme", "Red", type=str)
         if theme == "Blue": return QColor(0, 122, 255), QColor(0, 122, 255, 31), QColor("white")
         elif theme == "Green": return QColor(40, 200, 64), QColor(40, 200, 64, 31), QColor("white")
         elif theme == "Purple": return QColor(175, 82, 222), QColor(175, 82, 222, 31), QColor("white")
         elif theme == "Gold": return QColor(255, 204, 0), QColor(255, 204, 0, 31), QColor("black")
         return QColor(255, 0, 0), QColor(255, 0, 0, 31), QColor("white")
-
-    def on_theme_changed(self, theme_name):
-        self.settings.setValue("highlight_theme", theme_name)
-        if hasattr(self, 'para_selection') and self.para_selection:
-            _, alpha, _ = self.get_theme_colors()
-            self.para_selection.format.setBackground(alpha)
-        if hasattr(self, 'word_selection') and self.word_selection:
-            solid, _, text_color = self.get_theme_colors()
-            self.word_selection.format.setBackground(solid)
-            self.word_selection.format.setForeground(text_color)
-        self._apply_highlights()
-
-    def on_font_family_changed(self, font_name):
-        self.settings.setValue("font_family", font_name)
-        
-        # Reader font
-        current_size = self.reader_box.font().pointSize()
-        new_base_font = QFont(font_name, current_size)
-        self.reader_box.setFont(new_base_font)
-        
-        # Notes & Bookmark font (preserving the 75% scaling)
-        notes_size = max(int(current_size * 0.75), 9)
-        new_notes_font = QFont(font_name, notes_size)
-        self.notes_box.setFont(new_notes_font)
-        self.bookmarks_list.setFont(new_notes_font)
 
     def refresh_history_menu(self):
         self.history_menu.clear()
