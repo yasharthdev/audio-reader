@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
                              QInputDialog, QListWidgetItem, QMessageBox, QMenu)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
 from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction
 
 pygame.mixer.init()
@@ -252,7 +252,8 @@ class AudiobookUI(QMainWindow):
         self.chapter_map = []
         self.current_paragraph_index = 0
         self.current_file_path = None
-        self.current_font_size = 18
+        
+        self.settings = QSettings("YasharthDev", "AudioReader")
 
         # --- NEW: QSplitter for draggable/collapsible panels ---
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -281,7 +282,8 @@ class AudiobookUI(QMainWindow):
         self.speed_combo.addItems([
             "1x", "1.25x", "1.5x", "1.75x", "2x", "2.25x", "2.5x", "3x"
         ])
-        self.speed_combo.setCurrentText("1x")
+        saved_speed = self.settings.value("playback_speed", "1x", type=str)
+        self.speed_combo.setCurrentText(saved_speed)
         
         self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
@@ -367,7 +369,7 @@ class AudiobookUI(QMainWindow):
         self.increase_font_btn.clicked.connect(self.increase_font)
         
         self.voice_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
-        self.speed_combo.currentIndexChanged.connect(lambda: self.play_from_index(self.current_paragraph_index))
+        self.speed_combo.currentIndexChanged.connect(self.on_speed_changed)
 
         # --- Bookmark Connections ---
         self.add_bookmark_btn.clicked.connect(self.create_explicit_bookmark)
@@ -383,22 +385,30 @@ class AudiobookUI(QMainWindow):
         self.delete_bookmark_btn.clicked.connect(self.delete_bookmark)
 
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
-        self.apply_font_size()
+        
+        saved_font_size = self.settings.value("font_size", 16, type=int)
+        base_font = QFont()
+        base_font.setPointSize(saved_font_size)
+        self.reader_box.setFont(base_font)
+        self.notes_box.setFont(base_font)
+        self.bookmarks_list.setFont(base_font)
+
+    def on_speed_changed(self):
+        speed_val = self.speed_combo.currentText()
+        self.settings.setValue("playback_speed", speed_val)
+        self.play_from_index(self.current_paragraph_index)
 
     def increase_font(self):
-        self.current_font_size += 2
-        self.apply_font_size()
+        self.reader_box.zoomIn(1)
+        self.notes_box.zoomIn(1)
+        new_size = self.reader_box.font().pointSize()
+        self.settings.setValue("font_size", new_size)
 
     def decrease_font(self):
-        if self.current_font_size > 8:
-            self.current_font_size -= 2
-            self.apply_font_size()
-
-    def apply_font_size(self):
-        style = f"font-size: {self.current_font_size}px;"
-        self.reader_box.setStyleSheet(style)
-        self.notes_box.setStyleSheet(style)
-        self.bookmarks_list.setStyleSheet(style)
+        self.reader_box.zoomOut(1)
+        self.notes_box.zoomOut(1)
+        new_size = self.reader_box.font().pointSize()
+        self.settings.setValue("font_size", new_size)
 
     def toggle_sidebar(self):
         """Shows or hides the right-hand panel."""
