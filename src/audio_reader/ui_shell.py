@@ -291,6 +291,12 @@ class AudiobookUI(QMainWindow):
         self.theme_combo.setCurrentText(saved_theme)
         self.theme_combo.currentTextChanged.connect(self.on_theme_changed)
         
+        self.font_combo = QComboBox()
+        self.font_combo.addItems(["Avenir", "Helvetica Neue", "Georgia", "Palatino", "SF Pro"])
+        saved_font_family = self.settings.value("font_family", "Avenir", type=str)
+        self.font_combo.setCurrentText(saved_font_family)
+        self.font_combo.currentTextChanged.connect(self.on_font_family_changed)
+        
         self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
         self.next_button = QPushButton("Next >>")
@@ -309,6 +315,7 @@ class AudiobookUI(QMainWindow):
         button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
         button_layout.addWidget(self.theme_combo)
+        button_layout.addWidget(self.font_combo)
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.next_button)
@@ -395,11 +402,15 @@ class AudiobookUI(QMainWindow):
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt file.</p>")
         
         saved_font_size = self.settings.value("font_size", 16, type=int)
-        base_font = QFont()
+        saved_font_family = self.settings.value("font_family", "Avenir", type=str)
+        base_font = QFont(saved_font_family)
         base_font.setPointSize(saved_font_size)
         self.reader_box.setFont(base_font)
-        self.notes_box.setFont(base_font)
-        self.bookmarks_list.setFont(base_font)
+        
+        notes_size = max(int(saved_font_size * 0.75), 9)
+        notes_font = QFont(base_font.family(), notes_size)
+        self.notes_box.setFont(notes_font)
+        self.bookmarks_list.setFont(notes_font)
         
         self.refresh_history_menu()
 
@@ -421,6 +432,20 @@ class AudiobookUI(QMainWindow):
             self.word_selection.format.setBackground(solid)
             self.word_selection.format.setForeground(text_color)
         self._apply_highlights()
+
+    def on_font_family_changed(self, font_name):
+        self.settings.setValue("font_family", font_name)
+        
+        # Reader font
+        current_size = self.reader_box.font().pointSize()
+        new_base_font = QFont(font_name, current_size)
+        self.reader_box.setFont(new_base_font)
+        
+        # Notes & Bookmark font (preserving the 75% scaling)
+        notes_size = max(int(current_size * 0.75), 9)
+        new_notes_font = QFont(font_name, notes_size)
+        self.notes_box.setFont(new_notes_font)
+        self.bookmarks_list.setFont(new_notes_font)
 
     def refresh_history_menu(self):
         self.history_menu.clear()
@@ -452,15 +477,21 @@ class AudiobookUI(QMainWindow):
 
     def increase_font(self):
         self.reader_box.zoomIn(1)
-        self.notes_box.zoomIn(1)
-        new_size = self.reader_box.font().pointSize()
-        self.settings.setValue("font_size", new_size)
+        current_size = self.reader_box.font().pointSize()
+        self.settings.setValue("font_size", current_size)
+        
+        notes_size = max(int(current_size * 0.75), 9)
+        self.notes_box.setFont(QFont(self.reader_box.font().family(), notes_size))
+        self.bookmarks_list.setFont(QFont(self.reader_box.font().family(), notes_size))
 
     def decrease_font(self):
         self.reader_box.zoomOut(1)
-        self.notes_box.zoomOut(1)
-        new_size = self.reader_box.font().pointSize()
-        self.settings.setValue("font_size", new_size)
+        current_size = self.reader_box.font().pointSize()
+        self.settings.setValue("font_size", current_size)
+        
+        notes_size = max(int(current_size * 0.75), 9)
+        self.notes_box.setFont(QFont(self.reader_box.font().family(), notes_size))
+        self.bookmarks_list.setFont(QFont(self.reader_box.font().family(), notes_size))
 
     def toggle_sidebar(self):
         """Shows or hides the right-hand panel."""
