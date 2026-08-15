@@ -11,9 +11,9 @@ from audio_reader.epub_parser import get_epub_paragraphs, get_epub_data
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
-                             QInputDialog, QListWidgetItem, QMessageBox, QMenu)
+                             QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
-from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction
+from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction, QColor, QTextCursor
 
 pygame.mixer.init()
 
@@ -105,6 +105,8 @@ class AudioEngineThread(QThread):
     # UPGRADE: Emit an INT (the index) alongside the STR (the html text)
     paragraph_changed = pyqtSignal(int, str) 
 
+    word_highlighted = pyqtSignal(int, int, int)
+
     def __init__(self, paragraphs, start_index=0, voice="en-US-BrianNeural", speed="+0%"):
         super().__init__()
         self.paragraphs = paragraphs
@@ -193,15 +195,7 @@ class AudioEngineThread(QThread):
                                 start_idx = match.start()
                                 end_idx = match.end()
                                 
-                                html_text = (
-                                    para[:start_idx] + 
-                                    "<span style='background-color: red;'>" + 
-                                    para[start_idx:end_idx] + 
-                                    "</span>" + 
-                                    para[end_idx:]
-                                )
-                                
-                                self.paragraph_changed.emit(current_index, html_text.replace('\n', '<br>'))
+                                self.word_highlighted.emit(current_index, start_idx, end_idx)
                                 
                             current_word_idx += 1
                 
@@ -285,6 +279,18 @@ class AudiobookUI(QMainWindow):
         saved_speed = self.settings.value("playback_speed", "1x", type=str)
         self.speed_combo.setCurrentText(saved_speed)
         
+        self.history_btn = QToolButton()
+        self.history_btn.setText("History")
+        self.history_menu = QMenu(self)
+        self.history_btn.setMenu(self.history_menu)
+        self.history_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Red", "Blue", "Green", "Purple", "Gold"])
+        saved_theme = self.settings.value("highlight_theme", "Red", type=str)
+        self.theme_combo.setCurrentText(saved_theme)
+        self.theme_combo.currentTextChanged.connect(self.on_theme_changed)
+        
         self.prev_button = QPushButton("<< Prev")
         self.play_button = QPushButton("Play / Pause")
         self.next_button = QPushButton("Next >>")
@@ -299,8 +305,10 @@ class AudiobookUI(QMainWindow):
         self.contents_btn.setEnabled(False)
         
         button_layout.addWidget(self.load_button)
+        button_layout.addWidget(self.history_btn)
         button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
+        button_layout.addWidget(self.theme_combo)
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.next_button)
@@ -392,6 +400,50 @@ class AudiobookUI(QMainWindow):
         self.reader_box.setFont(base_font)
         self.notes_box.setFont(base_font)
         self.bookmarks_list.setFont(base_font)
+        
+        self.refresh_history_menu()
+
+    def get_theme_colors(self):
+        theme = self.theme_combo.currentText()
+        if theme == "Blue": return QColor(0, 122, 255), QColor(0, 122, 255, 31), QColor("white")
+        elif theme == "Green": return QColor(40, 200, 64), QColor(40, 200, 64, 31), QColor("white")
+        elif theme == "Purple": return QColor(175, 82, 222), QColor(175, 82, 222, 31), QColor("white")
+        elif theme == "Gold": return QColor(255, 204, 0), QColor(255, 204, 0, 31), QColor("black")
+        return QColor(255, 0, 0), QColor(255, 0, 0, 31), QColor("white")
+
+    def on_theme_changed(self, theme_name):
+        self.settings.setValue("highlight_theme", theme_name)
+        if hasattr(self, 'para_selection') and self.para_selection:
+            _, alpha, _ = self.get_theme_colors()
+            self.para_selection.format.setBackground(alpha)
+        if hasattr(self, 'word_selection') and self.word_selection:
+            solid, _, text_color = self.get_theme_colors()
+            self.word_selection.format.setBackground(solid)
+            self.word_selection.format.setForeground(text_color)
+        self._apply_highlights()
+
+    def refresh_history_menu(self):
+        self.history_menu.clear()
+        recent_books = self.settings.value("recent_books", [], type=list)
+        if recent_books:
+            for book_path in recent_books:
+                if os.path.exists(book_path):
+                    filename = os.path.basename(book_path)
+                    action = QAction(filename, self)
+                    action.triggered.connect(lambda checked, path=book_path: self.load_book_from_path(path))
+                    self.history_menu.addAction(action)
+            self.history_menu.addSeparator()
+            clear_action = QAction("Clear History", self)
+            clear_action.triggered.connect(self.clear_history)
+            self.history_menu.addAction(clear_action)
+        else:
+            empty_action = QAction("No Recent Books", self)
+            empty_action.setEnabled(False)
+            self.history_menu.addAction(empty_action)
+
+    def clear_history(self):
+        self.settings.setValue("recent_books", [])
+        self.refresh_history_menu()
 
     def on_speed_changed(self):
         speed_val = self.speed_combo.currentText()
@@ -601,19 +653,32 @@ class AudiobookUI(QMainWindow):
             "", 
             "Books (*.txt *.epub);;Text Files (*.txt);;EPUB Files (*.epub);;All Files (*)"
         )
-        
         if file_path:
-            self.current_file_path = file_path # Save the path to the class state
+            self.load_book_from_path(file_path)
+
+    def load_book_from_path(self, file_path):
+        if not file_path or not os.path.exists(file_path):
+            return
             
-            # Disable button and show loading text
-            self.load_button.setEnabled(False)
-            self.reader_box.setHtml("<h3>Loading...</h3><p>Please wait while the book is being parsed.</p>")
-            
-            # Start background thread
-            self.loader_thread = BookLoaderThread(file_path)
-            self.loader_thread.finished_loading.connect(self.on_book_loaded)
-            self.loader_thread.error_loading.connect(self.on_book_load_error)
-            self.loader_thread.start()
+        recent_books = self.settings.value("recent_books", [], type=list)
+        if file_path in recent_books:
+            recent_books.remove(file_path)
+        recent_books.insert(0, file_path)
+        recent_books = recent_books[:10]
+        self.settings.setValue("recent_books", recent_books)
+        self.refresh_history_menu()
+        
+        self.current_file_path = file_path # Save the path to the class state
+        
+        # Disable button and show loading text
+        self.load_button.setEnabled(False)
+        self.reader_box.setHtml("<h3>Loading...</h3><p>Please wait while the book is being parsed.</p>")
+        
+        # Start background thread
+        self.loader_thread = BookLoaderThread(file_path)
+        self.loader_thread.finished_loading.connect(self.on_book_loaded)
+        self.loader_thread.error_loading.connect(self.on_book_load_error)
+        self.loader_thread.start()
 
     def on_book_loaded(self, paragraphs, chapter_map):
         self.load_button.setEnabled(True)
@@ -623,7 +688,7 @@ class AudiobookUI(QMainWindow):
         if not self.book_paragraphs:
             self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
             return
-
+            
         # Populate the Contents menu
         self.contents_menu.clear()
         if self.chapter_map:
@@ -707,6 +772,7 @@ class AudiobookUI(QMainWindow):
             speed=edge_speed # Pass the translated percentage to the backend
         )
         self.engine_thread.paragraph_changed.connect(self.update_reader_box)
+        self.engine_thread.word_highlighted.connect(self.update_word_highlight)
         self.engine_thread.start()
 
     def skip_next(self):
@@ -714,6 +780,47 @@ class AudiobookUI(QMainWindow):
 
     def skip_prev(self):
         self.play_from_index(self.current_paragraph_index - 1)
+
+    def update_word_highlight(self, index, start_char, end_char):
+        if index != self.current_paragraph_index:
+            return
+            
+        doc = self.reader_box.document()
+        block = doc.lastBlock()
+        block_pos = block.position()
+        
+        solid, alpha, text_color = self.get_theme_colors()
+        
+        word_sel = QTextEdit.ExtraSelection()
+        word_sel.format.setBackground(solid)
+        word_sel.format.setForeground(text_color)
+        word_cursor = QTextCursor(doc)
+        word_cursor.setPosition(block_pos + start_char)
+        word_cursor.setPosition(block_pos + end_char, QTextCursor.MoveMode.KeepAnchor)
+        word_sel.cursor = word_cursor
+        
+        para_sel = QTextEdit.ExtraSelection()
+        para_sel.format.setBackground(alpha)
+        para_cursor = QTextCursor(doc)
+        text = block.text()
+        leading = len(text) - len(text.lstrip())
+        trailing = len(text) - len(text.rstrip())
+        
+        para_cursor.setPosition(block_pos + leading)
+        para_cursor.setPosition(block_pos + len(text) - trailing, QTextCursor.MoveMode.KeepAnchor)
+        para_sel.cursor = para_cursor
+        
+        self.para_selection = para_sel
+        self.word_selection = word_sel
+        self._apply_highlights()
+
+    def _apply_highlights(self):
+        selections = []
+        if hasattr(self, 'para_selection') and self.para_selection:
+            selections.append(self.para_selection)
+        if hasattr(self, 'word_selection') and self.word_selection:
+            selections.append(self.word_selection)
+        self.reader_box.setExtraSelections(selections)
 
     def get_active_chapter(self, index):
         if not self.chapter_map:
