@@ -8,13 +8,24 @@ import threading
 import pygame
 import json
 from audio_reader.epub_parser import get_epub_paragraphs, get_epub_data
+from pathlib import Path
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
                              QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton,
                              QDialog, QFormLayout, QSpinBox, QDialogButtonBox, QSizePolicy)
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
-from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction, QColor, QTextCursor
+from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction, QColor, QTextCursor, QTextCharFormat
+
+if sys.platform == 'win32':
+    SYS_FONTS = ["Segoe UI", "Georgia", "Consolas", "Arial"]
+    DEFAULT_FONT = "Segoe UI"
+elif sys.platform == 'darwin': # macOS
+    SYS_FONTS = ["Avenir", "Helvetica Neue", "Georgia", "Menlo"]
+    DEFAULT_FONT = "Avenir"
+else: # Linux fallback
+    SYS_FONTS = ["Ubuntu", "DejaVu Sans", "Liberation Mono"]
+    DEFAULT_FONT = "Ubuntu"
 
 pygame.mixer.init()
 
@@ -60,8 +71,8 @@ class SettingsDialog(QDialog):
         
         # Font Family
         self.font_combo = QComboBox()
-        self.font_combo.addItems(["Avenir", "Helvetica Neue", "Georgia", "Palatino", "Menlo"])
-        self.font_combo.setCurrentText(settings.value("font_family", "Avenir", type=str))
+        self.font_combo.addItems(SYS_FONTS)
+        self.font_combo.setCurrentText(settings.value("font_family", DEFAULT_FONT, type=str))
         self.layout.addRow("Font Family:", self.font_combo)
         
         # Highlight Theme
@@ -105,12 +116,10 @@ def download_audio(text: str, file_path: str, voice: str, speed: str) -> None:
             elif chunk["type"] in ["WordBoundary", "SentenceBoundary"]:
                 sub_maker.feed(chunk)
 
-        with open(file_path, "wb") as f:
-            f.write(audio_data)
+        Path(file_path).write_bytes(audio_data)
             
         srt_path = file_path.replace(".mp3", ".srt")
-        with open(srt_path, "w", encoding="utf-8") as f:
-            f.write(sub_maker.get_srt())
+        Path(srt_path).write_text(sub_maker.get_srt(), encoding="utf-8")
 
     import edge_tts
     asyncio.run(_generate())
@@ -126,8 +135,8 @@ def time_to_ms(time_str: str) -> int:
 
 def parse_srt(filepath: str) -> list[dict]:
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
+        content = Path(filepath).read_text(encoding='utf-8')
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
     except FileNotFoundError:
         return []
 
@@ -297,9 +306,8 @@ class BookLoaderThread(QThread):
                 paragraphs, chapter_map = get_epub_data(self.file_path)
                 self.finished_loading.emit(paragraphs, chapter_map)
             else:
-                with open(self.file_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                content = Path(self.file_path).read_text(encoding='utf-8')
+                paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
                 self.finished_loading.emit(paragraphs, [])
         except Exception as e:
             self.error_loading.emit(str(e))
@@ -514,7 +522,7 @@ class AudiobookUI(QMainWindow):
             self.apply_font_settings()
 
     def apply_font_settings(self):
-        font_name = self.settings.value("font_family", "Avenir", type=str)
+        font_name = self.settings.value("font_family", DEFAULT_FONT, type=str)
         target_size = self.settings.value("font_size", 16, type=int)
         
         current_size = self.reader_box.font().pointSize()
@@ -604,13 +612,12 @@ class AudiobookUI(QMainWindow):
 
     def get_bookmark(self, file_path):
         """Reads the JSON database and returns the auto-resume paragraph index."""
-        bookmarks_file = "bookmarks.json"
-        if not os.path.exists(bookmarks_file):
+        bookmarks_file = Path("bookmarks.json")
+        if not bookmarks_file.exists():
             return 0
             
         try:
-            with open(bookmarks_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
             
             book_data = data.get(file_path, 0)
             
@@ -634,10 +641,9 @@ class AudiobookUI(QMainWindow):
         
         # 1. Remove from JSON file
         if self.current_file_path:
-            bookmarks_file = "bookmarks.json"
-            if os.path.exists(bookmarks_file):
-                with open(bookmarks_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+            bookmarks_file = Path("bookmarks.json")
+            if bookmarks_file.exists():
+                data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
                 
                 if self.current_file_path in data:
                     # Filter out the bookmark with the matching index
@@ -647,8 +653,7 @@ class AudiobookUI(QMainWindow):
                     ]
                     
                     # Write the cleaned array back to the drive
-                    with open(bookmarks_file, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, indent=4)
+                    bookmarks_file.write_text(json.dumps(data, indent=4), encoding='utf-8')
                         
         # 2. Remove from UI list
         self.bookmarks_list.takeItem(self.bookmarks_list.row(item))
@@ -699,8 +704,7 @@ class AudiobookUI(QMainWindow):
         )
         
         if save_path:
-            with open(save_path, 'w', encoding='utf-8') as f:
-                f.write(notes_content)
+            Path(save_path).write_text(notes_content, encoding='utf-8')
             return True
             
         return False # The user canceled the save dialog
@@ -710,13 +714,12 @@ class AudiobookUI(QMainWindow):
         if not self.current_file_path:
             return
             
-        bookmarks_file = "bookmarks.json"
+        bookmarks_file = Path("bookmarks.json")
         data = {}
         
-        if os.path.exists(bookmarks_file):
+        if bookmarks_file.exists():
             try:
-                with open(bookmarks_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
             except Exception:
                 pass
                 
@@ -727,8 +730,7 @@ class AudiobookUI(QMainWindow):
         # Only update the last_played tracker; leave explicit bookmarks untouched
         data[self.current_file_path]["last_played"] = self.current_paragraph_index
         
-        with open(bookmarks_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
+        bookmarks_file.write_text(json.dumps(data, indent=4), encoding='utf-8')
 
     def create_explicit_bookmark(self):
         """Prompts the user for a name and saves the current index as a hard bookmark."""
@@ -738,11 +740,10 @@ class AudiobookUI(QMainWindow):
         name, ok = QInputDialog.getText(self, "New Bookmark", "Enter a name for this bookmark:")
         
         if ok and name:
-            bookmarks_file = "bookmarks.json"
+            bookmarks_file = Path("bookmarks.json")
             data = {}
-            if os.path.exists(bookmarks_file):
-                with open(bookmarks_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+            if bookmarks_file.exists():
+                data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
                     
             if self.current_file_path not in data or isinstance(data.get(self.current_file_path), int):
                 data[self.current_file_path] = {"last_played": self.current_paragraph_index, "bookmarks": []}
@@ -751,8 +752,7 @@ class AudiobookUI(QMainWindow):
             new_bookmark = {"name": name, "index": self.current_paragraph_index}
             data[self.current_file_path]["bookmarks"].append(new_bookmark)
             
-            with open(bookmarks_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
+            bookmarks_file.write_text(json.dumps(data, indent=4), encoding='utf-8')
                 
             self.refresh_bookmarks_ui()
 
@@ -762,10 +762,9 @@ class AudiobookUI(QMainWindow):
         if not self.current_file_path:
             return
             
-        bookmarks_file = "bookmarks.json"
-        if os.path.exists(bookmarks_file):
-            with open(bookmarks_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+        bookmarks_file = Path("bookmarks.json")
+        if bookmarks_file.exists():
+            data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
                 
             book_data = data.get(self.current_file_path, {})
             if isinstance(book_data, dict):
