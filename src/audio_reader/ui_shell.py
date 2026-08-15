@@ -37,7 +37,7 @@ QTextEdit, QListWidget { background-color: #FFFFFF; color: #2B2D42; padding: 24p
 QPushButton, QToolButton { background-color: #1E293B; color: #FFFFFF; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; border: none; }
 QPushButton:hover, QToolButton:hover { background-color: #334155; }
 QComboBox { background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; }
-QComboBox QAbstractItemView { background-color: #FFFFFF; color: #1E293B; selection-background-color: #E2E8F0; selection-color: #0F172A; padding: 4px 8px; }
+QComboBox QAbstractItemView { background-color: #FFFFFF; color: #1E293B; selection-background-color: #E2E8F0; selection-color: #0F172A; padding: 6px 12px; min-width: 150px; }
 QMenu { background-color: #FFFFFF; color: #1E293B; border: 1px solid #E2E8F0; selection-background-color: #F1F5F9; }
 QScrollBar:vertical { width: 8px; background: transparent; margin: 0px; }
 QScrollBar::handle:vertical { background: #CBD5E1; border-radius: 4px; min-height: 20px; }
@@ -53,7 +53,7 @@ QTextEdit, QListWidget { background-color: #1E1E1E; color: #E0E0E0; padding: 24p
 QPushButton, QToolButton { background-color: #333333; color: #FFFFFF; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; border: none; }
 QPushButton:hover, QToolButton:hover { background-color: #444444; }
 QComboBox { background-color: #2D2D30; color: #F3F4F6; border: 1px solid #3E3E42; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; }
-QComboBox QAbstractItemView { background-color: #252526; color: #F3F4F6; selection-background-color: #374151; selection-color: #FFFFFF; padding: 4px 8px; }
+QComboBox QAbstractItemView { background-color: #252526; color: #F3F4F6; selection-background-color: #374151; selection-color: #FFFFFF; padding: 6px 12px; min-width: 150px; }
 QMenu { background-color: #252526; color: #F3F4F6; border: 1px solid #3E3E42; selection-background-color: #374151; }
 QScrollBar:vertical { width: 8px; background: transparent; margin: 0px; }
 QScrollBar::handle:vertical { background: #4B5563; border-radius: 4px; min-height: 20px; }
@@ -73,18 +73,21 @@ class SettingsDialog(QDialog):
         self.font_combo = QComboBox()
         self.font_combo.addItems(SYS_FONTS)
         self.font_combo.setCurrentText(settings.value("font_family", DEFAULT_FONT, type=str))
+        self.font_combo.setMinimumWidth(150)
         self.layout.addRow("Font Family:", self.font_combo)
         
         # Highlight Theme
         self.highlight_combo = QComboBox()
         self.highlight_combo.addItems(["Red", "Blue", "Green", "Purple", "Gold"])
         self.highlight_combo.setCurrentText(settings.value("highlight_theme", "Red", type=str))
+        self.highlight_combo.setMinimumWidth(150)
         self.layout.addRow("Highlight Theme:", self.highlight_combo)
         
         # App Theme
         self.app_theme_combo = QComboBox()
         self.app_theme_combo.addItems(["Light", "Dark"])
         self.app_theme_combo.setCurrentText(settings.value("ui_mode", "Light", type=str))
+        self.app_theme_combo.setMinimumWidth(150)
         self.layout.addRow("UI Mode:", self.app_theme_combo)
         
         # Font Size
