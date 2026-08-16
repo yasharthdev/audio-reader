@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
                              QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton,
                              QDialog, QFormLayout, QSpinBox, QDialogButtonBox, QSizePolicy,
-                             QTreeWidget, QTreeWidgetItem)
+                             QTreeWidget, QTreeWidgetItem, QScrollArea, QFrame, QLabel)
 
 class ContentsDialog(QDialog):
     def __init__(self, chapter_map, parent=None):
@@ -116,40 +116,59 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Preferences")
         self.settings = settings
         
-        self.layout = QFormLayout(self)
+        self.main_layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        
+        # --- General Tab ---
+        self.general_tab = QWidget()
+        self.general_layout = QFormLayout(self.general_tab)
         
         # Font Family
         self.font_combo = QComboBox()
         self.font_combo.addItems(SYS_FONTS)
         self.font_combo.setCurrentText(settings.value("font_family", DEFAULT_FONT, type=str))
         self.font_combo.setMinimumWidth(150)
-        self.layout.addRow("Font Family:", self.font_combo)
+        self.general_layout.addRow("Font Family:", self.font_combo)
         
         # Highlight Theme
         self.highlight_combo = QComboBox()
         self.highlight_combo.addItems(["Red", "Blue", "Green", "Purple", "Gold"])
         self.highlight_combo.setCurrentText(settings.value("highlight_theme", "Red", type=str))
         self.highlight_combo.setMinimumWidth(150)
-        self.layout.addRow("Highlight Theme:", self.highlight_combo)
+        self.general_layout.addRow("Highlight Theme:", self.highlight_combo)
         
         # App Theme
         self.app_theme_combo = QComboBox()
         self.app_theme_combo.addItems(["Light", "Dark"])
         self.app_theme_combo.setCurrentText(settings.value("ui_mode", "Light", type=str))
         self.app_theme_combo.setMinimumWidth(150)
-        self.layout.addRow("UI Mode:", self.app_theme_combo)
+        self.general_layout.addRow("UI Mode:", self.app_theme_combo)
         
         # Font Size
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setRange(8, 72)
         self.font_size_spin.setValue(settings.value("font_size", 16, type=int))
-        self.layout.addRow("Font Size:", self.font_size_spin)
+        self.general_layout.addRow("Font Size:", self.font_size_spin)
+        
+        self.tabs.addTab(self.general_tab, "General")
+        
+        # --- Shortcuts Tab ---
+        self.shortcuts_tab = QWidget()
+        self.shortcuts_layout = QFormLayout(self.shortcuts_tab)
+        self.shortcuts_layout.addRow("Play / Pause:", QLabel("Space"))
+        self.shortcuts_layout.addRow("Previous Paragraph:", QLabel(","))
+        self.shortcuts_layout.addRow("Next Paragraph:", QLabel("."))
+        self.shortcuts_layout.addRow("Capture Highlight:", QLabel("Ctrl+Shift+H"))
+        
+        self.tabs.addTab(self.shortcuts_tab, "Shortcuts")
+        
+        self.main_layout.addWidget(self.tabs)
         
         # Buttons
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
-        self.layout.addWidget(self.buttons)
+        self.main_layout.addWidget(self.buttons)
 
 # ==========================================
 # 1. CORE ENGINE FUNCTIONS
@@ -408,9 +427,9 @@ class AudiobookUI(QMainWindow):
         self.speed_combo = QComboBox()
         # Clean UI multipliers
         self.speed_combo.addItems([
-            "1x", "1.25x", "1.5x", "1.75x", "2x", "2.25x", "2.5x", "3x"
+            "0.75x", "1.0x", "1.25x", "1.5x", "1.75x", "2.0x"
         ])
-        saved_speed = self.settings.value("playback_speed", "1x", type=str)
+        saved_speed = self.settings.value("playback_speed", "1.0x", type=str)
         self.speed_combo.setCurrentText(saved_speed)
         
         self.history_btn = QToolButton()
@@ -560,6 +579,12 @@ class AudiobookUI(QMainWindow):
         saved_mode = self.settings.value("ui_mode", "Light", type=str)
         self.apply_ui_mode(saved_mode)
         self.apply_font_settings()
+        self.init_shortcuts()
+
+    def init_shortcuts(self):
+        QShortcut(QKeySequence(Qt.Key.Key_Space), self).activated.connect(self.toggle_pause)
+        QShortcut(QKeySequence(","), self).activated.connect(self.skip_prev)
+        QShortcut(QKeySequence("."), self).activated.connect(self.skip_next)
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
@@ -939,14 +964,12 @@ class AudiobookUI(QMainWindow):
         
         # --- NEW: Translate UI multiplier to Edge-TTS percentage ---
         speed_map = {
-            "1x": "+0%",
+            "0.75x": "-25%",
+            "1.0x": "+0%",
             "1.25x": "+25%",
             "1.5x": "+50%",
             "1.75x": "+75%",
-            "2x": "+100%",
-            "2.25x": "+125%",
-            "2.5x": "+150%",
-            "3x": "+200%"
+            "2.0x": "+100%"
         }
         edge_speed = speed_map.get(ui_speed, "+0%") # Fallback to +0% just in case
         
