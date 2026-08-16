@@ -13,7 +13,56 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
                              QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton,
-                             QDialog, QFormLayout, QSpinBox, QDialogButtonBox, QSizePolicy)
+                             QDialog, QFormLayout, QSpinBox, QDialogButtonBox, QSizePolicy,
+                             QTreeWidget, QTreeWidgetItem)
+
+class ContentsDialog(QDialog):
+    def __init__(self, chapter_map, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Table of Contents")
+        self.resize(400, 500)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setStyleSheet("""
+            QTreeWidget {
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                padding: 5px;
+            }
+            QTreeWidget::item {
+                padding: 4px;
+            }
+            QTreeWidget::item:hover {
+                background-color: rgba(100, 100, 100, 30);
+                border-radius: 3px;
+            }
+            QTreeWidget::item:selected {
+                background-color: rgba(100, 100, 255, 50);
+                border-radius: 3px;
+            }
+        """)
+        self.layout.addWidget(self.tree)
+        
+        self.populate_tree(self.tree, chapter_map)
+        self.tree.itemClicked.connect(self.on_item_clicked)
+        self.tree.expandAll()
+        
+        self.selected_index = None
+
+    def populate_tree(self, parent_widget, items):
+        for item in items:
+            tree_item = QTreeWidgetItem(parent_widget)
+            tree_item.setText(0, item['title'])
+            tree_item.setData(0, Qt.ItemDataRole.UserRole, item['start_index'])
+            if item.get('children'):
+                self.populate_tree(tree_item, item['children'])
+                
+    def on_item_clicked(self, item, column):
+        self.selected_index = item.data(0, Qt.ItemDataRole.UserRole)
+        self.accept()
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
 from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction, QColor, QTextCursor, QTextCharFormat
 
@@ -380,8 +429,7 @@ class AudiobookUI(QMainWindow):
         # NEW: Button to collapse the right panel
         self.toggle_panel_btn = QPushButton("Toggle Sidebar") 
         self.contents_btn = QPushButton("Contents")
-        self.contents_menu = QMenu(self)
-        self.contents_btn.setMenu(self.contents_menu)
+        self.contents_btn.clicked.connect(self.show_contents_dialog)
         self.contents_btn.setEnabled(False)
         
         button_layout.addWidget(self.load_button)
@@ -817,6 +865,12 @@ class AudiobookUI(QMainWindow):
         self.loader_thread.error_loading.connect(self.on_book_load_error)
         self.loader_thread.start()
 
+    def show_contents_dialog(self):
+        if not self.chapter_map: return
+        dialog = ContentsDialog(self.chapter_map, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_index is not None:
+            self.play_from_index(dialog.selected_index)
+
     def on_book_loaded(self, paragraphs, chapter_map):
         self.load_button.setEnabled(True)
         self.book_paragraphs = paragraphs
@@ -826,13 +880,8 @@ class AudiobookUI(QMainWindow):
             self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
             return
             
-        # Populate the Contents menu
-        self.contents_menu.clear()
+        # Enable the Contents button if we have chapters
         if self.chapter_map:
-            for chapter in self.chapter_map:
-                action = QAction(chapter['title'], self)
-                action.triggered.connect(lambda checked, idx=chapter['start_index']: self.play_from_index(idx))
-                self.contents_menu.addAction(action)
             self.contents_btn.setEnabled(True)
         else:
             self.contents_btn.setEnabled(False)
