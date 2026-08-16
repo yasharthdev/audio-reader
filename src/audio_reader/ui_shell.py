@@ -494,6 +494,10 @@ class AudiobookUI(QMainWindow):
         self.notes_box.setPlaceholderText("Start typing your timestamped notes here...")
         notes_layout.addWidget(self.notes_box)
         
+        self.notes_dir = Path("Notes")
+        self.notes_dir.mkdir(exist_ok=True)
+        self.notes_box.textChanged.connect(self.auto_save_notes)
+        
         notes_btn_layout = QHBoxLayout()
         notes_btn_layout.setSpacing(12)
         self.clear_notes_btn = QPushButton("Clear All Notes")
@@ -750,7 +754,11 @@ class AudiobookUI(QMainWindow):
         selected_text = selected_text.replace('\u2029', ' ')
         
         # 5. Format as Markdown quote
-        timestamp_context = f"\n**[Paragraph {self.current_paragraph_index + 1}]**"
+        chapter = self.get_active_chapter(self.current_paragraph_index)
+        if chapter:
+            timestamp_context = f"\n**[{chapter} - Para {self.current_paragraph_index + 1}]**"
+        else:
+            timestamp_context = f"\n**[Para {self.current_paragraph_index + 1}]**"
         markdown_quote = f"> {selected_text}\n\n"
         
         # 6. Switch UI to Notes tab
@@ -901,6 +909,16 @@ class AudiobookUI(QMainWindow):
         self.book_paragraphs = paragraphs
         self.chapter_map = chapter_map
         
+        # Auto-load notes
+        self.notes_box.blockSignals(True)
+        self.notes_box.clear()
+        if self.current_file_path:
+            base_name = os.path.basename(self.current_file_path).split('.')[0]
+            note_path = self.notes_dir / f"{base_name}.md"
+            if note_path.exists():
+                self.notes_box.setPlainText(note_path.read_text(encoding='utf-8'))
+        self.notes_box.blockSignals(False)
+        
         if not self.book_paragraphs:
             self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
             return
@@ -1031,17 +1049,37 @@ class AudiobookUI(QMainWindow):
             selections.append(self.word_selection)
         self.reader_box.setExtraSelections(selections)
 
+    def auto_save_notes(self):
+        if not self.current_file_path:
+            return
+        base_name = os.path.basename(self.current_file_path).split('.')[0]
+        note_path = self.notes_dir / f"{base_name}.md"
+        
+        # Disable signal to prevent recursive loops if needed, though write_text doesn't trigger textChanged
+        note_path.write_text(self.notes_box.toPlainText(), encoding='utf-8')
+
     def get_active_chapter(self, index):
         if not self.chapter_map:
-            return f"Paragraph {index + 1} of {len(self.book_paragraphs)}"
-        
-        current_chapter = self.chapter_map[0]['title'] if self.chapter_map else f"Paragraph {index + 1}"
-        for chapter in self.chapter_map:
-            if chapter['start_index'] <= index:
-                current_chapter = chapter['title']
-            else:
-                break
-        return current_chapter
+            return ""
+            
+        def search_toc(toc_list):
+            best_match = None
+            for item in toc_list:
+                if item['start_index'] <= index:
+                    best_match = item
+                else:
+                    break
+            
+            if best_match:
+                if best_match.get('children'):
+                    child_match = search_toc(best_match['children'])
+                    if child_match:
+                        return f"{best_match['title']} - {child_match}"
+                return best_match['title']
+            return None
+
+        result = search_toc(self.chapter_map)
+        return result if result else ""
 
     def update_reader_box(self, index, text):
         self.current_paragraph_index = index 
