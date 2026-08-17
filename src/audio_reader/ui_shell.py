@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QInputDialog, QListWidgetItem, QMessageBox, QMenu, QToolButton,
                              QDialog, QFormLayout, QSpinBox, QDialogButtonBox, QSizePolicy,
                              QTreeWidget, QTreeWidgetItem, QScrollArea, QFrame, QLabel)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QSettings
 
 class ContentsDialog(QDialog):
     def __init__(self, chapter_map, parent=None):
@@ -257,8 +258,8 @@ def cleanup_audio(filepath: str):
 class AudioEngineThread(QThread):
     # UPGRADE: Emit an INT (the index) alongside the STR (the html text)
     paragraph_changed = pyqtSignal(int, str) 
-
     word_highlighted = pyqtSignal(int, int, int)
+    waiting_for_audio = pyqtSignal()
 
     def __init__(self, paragraphs, start_index=0, voice="en-US-BrianNeural", speed="+0%", start_word_idx=0):
         super().__init__()
@@ -304,6 +305,9 @@ class AudioEngineThread(QThread):
                 break
                 
             self.is_paused = False
+            
+            if self.audio_queue.empty():
+                self.waiting_for_audio.emit()
             
             # FIX: Add a timeout so it checks if the app is closing instead of freezing
             queue_item = None
@@ -400,6 +404,59 @@ class BookLoaderThread(QThread):
         except Exception as e:
             self.error_loading.emit(str(e))
 
+class LoadingOverlay(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        
+        self.label = QLabel("Loading Audio...", self)
+        self.label.setStyleSheet("""
+            background-color: rgba(30, 30, 30, 200); 
+            color: white; 
+            padding: 15px 25px; 
+            border-radius: 12px; 
+            font-size: 16px;
+            font-weight: bold;
+        """)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.show_playful_message)
+        
+        self.hide()
+        
+    def show_playful_message(self):
+        import random
+        messages = [
+            "Whoa, this paragraph is massive! Hang tight...",
+            "The AI is reading as fast as it can! Just a few more seconds...",
+            "Still parsing! This usually only takes a second...",
+            "This must be a long one! Grabbing some coffee...",
+            "Generating speech... patience is a virtue!"
+        ]
+        self.label.setText(f"Loading Audio...\n\n{random.choice(messages)}")
+        self.resizeEvent(None) # Recenter
+        
+    def start_loading(self):
+        self.label.setText("Loading Audio...")
+        self.resizeEvent(None)
+        self.show()
+        self.timer.start(2500) # Wait 2.5 seconds before showing the message
+        
+    def stop_loading(self):
+        self.timer.stop()
+        self.hide()
+        
+    def resizeEvent(self, event):
+        if event:
+            super().resizeEvent(event)
+        self.label.adjustSize()
+        self.label.move(
+            (self.width() - self.label.width()) // 2,
+            (self.height() - self.label.height()) // 2
+        )
+
 class ReaderTextEdit(QTextEdit):
     word_clicked = pyqtSignal(int)
     word_hovered = pyqtSignal(int)
@@ -425,6 +482,11 @@ class ReaderTextEdit(QTextEdit):
     def leaveEvent(self, event):
         super().leaveEvent(event)
         self.word_hovered.emit(-1)
+        
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'overlay') and self.overlay:
+            self.overlay.resize(self.size())
 
 # ==========================================
 # 3. THE UI CANVAS
@@ -455,6 +517,8 @@ class AudiobookUI(QMainWindow):
         left_panel = QVBoxLayout(self.left_widget)
         
         self.reader_box = ReaderTextEdit()
+        self.loading_overlay = LoadingOverlay(self.reader_box)
+        self.reader_box.overlay = self.loading_overlay
         self.reader_box.setReadOnly(True)
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt or .epub file.</p>")
         self.reader_box.word_clicked.connect(self.on_word_clicked)
@@ -1116,6 +1180,14 @@ class AudiobookUI(QMainWindow):
         )
         self.engine_thread.paragraph_changed.connect(self.update_reader_box)
         self.engine_thread.word_highlighted.connect(self.update_word_highlight)
+        self.engine_thread.waiting_for_audio.connect(self.loading_overlay.start_loading)
+        
+        # --- NEW: Eagerly update UI so it feels instantaneous ---
+        para_text = self.book_paragraphs[index]
+        self.update_reader_box(index, para_text.replace('\n', '<br>'))
+        self.statusBar().showMessage(f"Parsing Audio for Paragraph {index + 1} / {len(self.book_paragraphs)}...")
+        self.loading_overlay.start_loading()
+        
         self.engine_thread.start()
 
     def skip_next(self):
@@ -1228,6 +1300,11 @@ class AudiobookUI(QMainWindow):
         # 3. Instantly snap the scrollbar back to where you left it
         if scrollbar is not None:
             scrollbar.setValue(current_scroll)
+            
+        # 4. Clear any loading messages
+        self.statusBar().clearMessage()
+        if hasattr(self, 'loading_overlay'):
+            self.loading_overlay.stop_loading()
 
     def toggle_pause(self):
         if hasattr(self, 'engine_thread'):
