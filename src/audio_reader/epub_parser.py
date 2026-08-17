@@ -51,6 +51,8 @@ def get_epub_data(filepath: str) -> tuple[list[str], list[dict]]:
         return [], []
 
     paragraphs = []
+    chapter_map = []
+    stack = []
     href_to_index = {}
     
     for item in book.get_items():
@@ -67,9 +69,29 @@ def get_epub_data(filepath: str) -> tuple[list[str], list[dict]]:
                 if tag.get('id'):
                     href_to_index[f"{item.file_name}#{tag.get('id')}"] = len(paragraphs)
                     
+                if tag.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                    level = int(tag.name[1])
+                    node = {
+                        "title": text,
+                        "start_index": len(paragraphs),
+                        "children": []
+                    }
+                    
+                    while stack and stack[-1][0] >= level:
+                        stack.pop()
+                        
+                    if not stack:
+                        chapter_map.append(node)
+                    else:
+                        stack[-1][1]["children"].append(node)
+                        
+                    stack.append((level, node))
+                    
                 paragraphs.append(text)
                     
-    chapter_map = _parse_toc(book.toc, href_to_index)
+    if not chapter_map:
+        chapter_map = _parse_toc(book.toc, href_to_index)
+        
     return paragraphs, chapter_map
 
 def get_epub_paragraphs(filepath: str) -> list[str]:
