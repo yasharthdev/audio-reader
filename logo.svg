@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#000000"/>
+  <g fill="#ffffff">
+    <!-- Top row -->
+    <rect x="140" y="160" width="70" height="24"/>
+    <rect x="302" y="160" width="70" height="24"/>
+    
+    <!-- Second row (The Wave) -->
+    <path d="M140 220 H 210 Q 256 220 256 255 Q 256 220 302 220 H 372 V 196 H 302 Q 256 196 256 225 Q 256 196 210 196 H 140 Z"/>
+    
+    <!-- Third row -->
+    <path d="M140 280 H 210 Q 256 280 256 315 Q 256 280 302 280 H 372 V 256 H 302 Q 256 256 256 285 Q 256 256 210 256 H 140 Z"/>
+
+    <!-- Bottom row -->
+    <path d="M140 340 H 210 Q 256 340 256 375 Q 256 340 302 340 H 372 V 316 H 302 Q 256 316 256 345 Q 256 316 210 316 H 140 Z"/>
+  </g>
+</svg>

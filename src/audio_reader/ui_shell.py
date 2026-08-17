@@ -6,9 +6,12 @@ import asyncio
 import queue
 import threading
 import pygame
+import edge_tts
 import json
 from audio_reader.epub_parser import get_epub_paragraphs, get_epub_data
 from pathlib import Path
+GLOBAL_APP_DIR = Path.home() / "Documents" / "AudioReader"
+GLOBAL_APP_DIR.mkdir(parents=True, exist_ok=True)
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton,
                              QFileDialog, QComboBox, QSplitter, QTabWidget, QListWidget,
@@ -192,7 +195,6 @@ def download_audio(text: str, file_path: str, voice: str, speed: str) -> None:
         srt_path = file_path.replace(".mp3", ".srt")
         Path(srt_path).write_text(sub_maker.get_srt(), encoding="utf-8")
 
-    import edge_tts
     asyncio.run(_generate())
 
 def time_to_ms(time_str: str) -> int:
@@ -280,7 +282,7 @@ class AudioEngineThread(QThread):
                 if not self.is_running:
                     break
                 
-                mp3_path = f"temp_{i}.mp3"
+                mp3_path = str(GLOBAL_APP_DIR / f"temp_{i}.mp3")
                 download_audio(self.paragraphs[i], mp3_path, self.voice, self.speed)
                 srt_path = mp3_path.replace(".mp3", ".srt")
                 
@@ -974,7 +976,7 @@ class AudiobookUI(QMainWindow):
                 self.engine_thread.wait()
 
         # Sweep folder so skips don't leave zombie audio files
-        for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
+        for file in glob.glob(str(GLOBAL_APP_DIR / "temp_*.mp3")) + glob.glob(str(GLOBAL_APP_DIR / "temp_*.srt")):
             try:
                 os.remove(file)
             except OSError:
@@ -1112,47 +1114,21 @@ class AudiobookUI(QMainWindow):
             self.engine_thread.is_paused = not self.engine_thread.is_paused
 
     def closeEvent(self, event):
-        """Intercepts shutdown to check for unsaved notes, then cleans up background threads."""
-        # --- 1. Check for unsaved notes first ---
-        notes_content = self.notes_box.toPlainText().strip()
-        proceed_to_close = True
-        
-        if notes_content:
-            reply = QMessageBox.question(
-                self, 
-                'Unsaved Notes Detected',
-                'You have text in your Notes panel. Do you want to export it before exiting?',
-                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Save
-            )
-
-            if reply == QMessageBox.StandardButton.Save:
-                # If they cancel the file browser, stop the shutdown
-                if not self.export_to_obsidian():
-                    proceed_to_close = False 
-            elif reply == QMessageBox.StandardButton.Cancel:
-                # If they cancel the warning box, stop the shutdown
-                proceed_to_close = False
-
-        # --- 2. Execute background cleanup ONLY if we are proceeding ---
-        if proceed_to_close:
-            # Kill the audio engine
-            if hasattr(self, 'engine_thread'):
-                self.engine_thread.is_running = False
-                self.engine_thread.quit()
-                self.engine_thread.wait()
+        """Intercepts shutdown to clean up background threads and temp files."""
+        # Kill the audio engine
+        if hasattr(self, 'engine_thread'):
+            self.engine_thread.is_running = False
+            self.engine_thread.quit()
+            self.engine_thread.wait()
+            
+        # Sweep the temporary audio files
+        for file in glob.glob(str(GLOBAL_APP_DIR / "temp_*.mp3")) + glob.glob(str(GLOBAL_APP_DIR / "temp_*.srt")):
+            try:
+                os.remove(file)
+            except OSError:
+                pass
                 
-            # Sweep the temporary audio files
-            for file in glob.glob("temp_*.mp3") + glob.glob("temp_*.srt"):
-                try:
-                    os.remove(file)
-                except OSError:
-                    pass
-                    
-            event.accept()
-        else:
-            # Abort the shutdown, go back to the app
-            event.ignore()
+        event.accept()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
