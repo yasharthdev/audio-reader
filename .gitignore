@@ -14,3 +14,4 @@ temp_*.mp3
 books/
 bookmarks.json
 Notes/
+*.spec

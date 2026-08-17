@@ -397,6 +397,10 @@ class AudiobookUI(QMainWindow):
         self.current_paragraph_index = 0
         self.current_file_path = None
         
+        # Determine App Directory
+        self.app_dir = Path.home() / "Documents" / "AudioReader"
+        self.app_dir.mkdir(parents=True, exist_ok=True)
+        
         self.settings = QSettings("YasharthDev", "AudioReader")
 
         # --- NEW: QSplitter for draggable/collapsible panels ---
@@ -494,8 +498,8 @@ class AudiobookUI(QMainWindow):
         self.notes_box.setPlaceholderText("Start typing your timestamped notes here...")
         notes_layout.addWidget(self.notes_box)
         
-        self.notes_dir = Path("Notes")
-        self.notes_dir.mkdir(exist_ok=True)
+        self.notes_dir = self.app_dir / "Notes"
+        self.notes_dir.mkdir(parents=True, exist_ok=True)
         self.notes_box.textChanged.connect(self.auto_save_notes)
         
         notes_btn_layout = QHBoxLayout()
@@ -692,7 +696,7 @@ class AudiobookUI(QMainWindow):
 
     def get_bookmark(self, file_path):
         """Reads the JSON database and returns the auto-resume paragraph index."""
-        bookmarks_file = Path("bookmarks.json")
+        bookmarks_file = self.app_dir / "bookmarks.json"
         if not bookmarks_file.exists():
             return 0
             
@@ -721,7 +725,7 @@ class AudiobookUI(QMainWindow):
         
         # 1. Remove from JSON file
         if self.current_file_path:
-            bookmarks_file = Path("bookmarks.json")
+            bookmarks_file = self.app_dir / "bookmarks.json"
             if bookmarks_file.exists():
                 data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
                 
@@ -798,7 +802,7 @@ class AudiobookUI(QMainWindow):
         if not self.current_file_path:
             return
             
-        bookmarks_file = Path("bookmarks.json")
+        bookmarks_file = self.app_dir / "bookmarks.json"
         data = {}
         
         if bookmarks_file.exists():
@@ -824,7 +828,7 @@ class AudiobookUI(QMainWindow):
         name, ok = QInputDialog.getText(self, "New Bookmark", "Enter a name for this bookmark:")
         
         if ok and name:
-            bookmarks_file = Path("bookmarks.json")
+            bookmarks_file = self.app_dir / "bookmarks.json"
             data = {}
             if bookmarks_file.exists():
                 data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
@@ -846,7 +850,7 @@ class AudiobookUI(QMainWindow):
         if not self.current_file_path:
             return
             
-        bookmarks_file = Path("bookmarks.json")
+        bookmarks_file = self.app_dir / "bookmarks.json"
         if bookmarks_file.exists():
             data = json.loads(bookmarks_file.read_text(encoding='utf-8'))
                 
