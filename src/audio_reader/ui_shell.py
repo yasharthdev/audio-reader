@@ -260,12 +260,13 @@ class AudioEngineThread(QThread):
 
     word_highlighted = pyqtSignal(int, int, int)
 
-    def __init__(self, paragraphs, start_index=0, voice="en-US-BrianNeural", speed="+0%"):
+    def __init__(self, paragraphs, start_index=0, voice="en-US-BrianNeural", speed="+0%", start_word_idx=0):
         super().__init__()
         self.paragraphs = paragraphs
         self.start_index = start_index  # <--- Track where we start
         self.voice = voice
         self.speed = speed
+        self.start_word_idx = start_word_idx
         
         self.is_running = True
         self.is_paused = False
@@ -321,11 +322,25 @@ class AudioEngineThread(QThread):
             word_matches = list(re.finditer(r"[^\W_]+(?:[-'’][^\W_]+)*", para))
             
             self.paragraph_changed.emit(current_index, para.replace('\n', '<br>'))
-            play_audio(mp3_path)
             
-            was_paused = False
             srt_data = parse_srt(srt_path)
             current_word_idx = 0
+            time_offset = 0
+            
+            if self.start_word_idx > 0 and current_index == self.start_index:
+                if self.start_word_idx < len(srt_data):
+                    start_ms = srt_data[self.start_word_idx]["start"]
+                    current_word_idx = self.start_word_idx
+                    start_sec = start_ms / 1000.0
+                    pygame.mixer.music.load(mp3_path)
+                    pygame.mixer.music.play(start=start_sec)
+                    time_offset = start_ms
+                else:
+                    play_audio(mp3_path)
+            else:
+                play_audio(mp3_path)
+            
+            was_paused = False
             
             while True:
                 if self.is_paused and not was_paused:
@@ -337,7 +352,7 @@ class AudioEngineThread(QThread):
                     pygame.time.wait(50)
                 
                 if not self.is_paused and is_playing_audio():
-                    current_time = pygame.mixer.music.get_pos()
+                    current_time = pygame.mixer.music.get_pos() + time_offset
                     
                     if current_word_idx < len(srt_data):
                         target_word = srt_data[current_word_idx]
@@ -385,6 +400,32 @@ class BookLoaderThread(QThread):
         except Exception as e:
             self.error_loading.emit(str(e))
 
+class ReaderTextEdit(QTextEdit):
+    word_clicked = pyqtSignal(int)
+    word_hovered = pyqtSignal(int)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        # If there's no selection, they just clicked
+        if not self.textCursor().hasSelection():
+            cursor = self.cursorForPosition(event.pos())
+            self.word_clicked.emit(cursor.positionInBlock())
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        if not self.textCursor().hasSelection():
+            cursor = self.cursorForPosition(event.pos())
+            self.word_hovered.emit(cursor.positionInBlock())
+            
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.word_hovered.emit(-1)
+
 # ==========================================
 # 3. THE UI CANVAS
 # ==========================================
@@ -413,9 +454,11 @@ class AudiobookUI(QMainWindow):
         self.left_widget = QWidget()
         left_panel = QVBoxLayout(self.left_widget)
         
-        self.reader_box = QTextEdit()
+        self.reader_box = ReaderTextEdit()
         self.reader_box.setReadOnly(True)
         self.reader_box.setHtml("<h3>Welcome</h3><p>Click 'Load Book' to select a .txt or .epub file.</p>")
+        self.reader_box.word_clicked.connect(self.on_word_clicked)
+        self.reader_box.word_hovered.connect(self.on_word_hovered)
         
         button_layout = QHBoxLayout()
         self.load_button = QPushButton("Load Book")
@@ -952,7 +995,73 @@ class AudiobookUI(QMainWindow):
         self.load_button.setEnabled(True)
         self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {error_msg}</p>")
 
-    def play_from_index(self, index):
+    def on_word_clicked(self, char_pos):
+        if not self.book_paragraphs or self.current_paragraph_index >= len(self.book_paragraphs):
+            return
+            
+        word_matches = getattr(self, 'current_word_matches', [])
+        
+        target_word_idx = -1
+        for idx, match in enumerate(word_matches):
+            if match.start() <= char_pos <= match.end():
+                target_word_idx = idx
+                break
+                
+        if target_word_idx != -1:
+            self.play_from_index(self.current_paragraph_index, start_word_idx=target_word_idx)
+
+    def on_word_hovered(self, char_pos):
+        if char_pos == -1 or not self.book_paragraphs or self.current_paragraph_index >= len(self.book_paragraphs):
+            if getattr(self, 'last_hovered_word_idx', None) != -1:
+                self.hover_selection = None
+                self.last_hovered_word_idx = -1
+                self._apply_highlights()
+                self.reader_box.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            return
+
+        word_matches = getattr(self, 'current_word_matches', [])
+        
+        target_idx = -1
+        target_match = None
+        for idx, match in enumerate(word_matches):
+            if match.start() <= char_pos <= match.end():
+                target_idx = idx
+                target_match = match
+                break
+                
+        if target_idx == getattr(self, 'last_hovered_word_idx', None):
+            return
+            
+        self.last_hovered_word_idx = target_idx
+                
+        if target_match:
+            doc = self.reader_box.document()
+            block = doc.lastBlock()
+            block_pos = block.position()
+            
+            hover_sel = QTextEdit.ExtraSelection()
+            solid, alpha, text_color = self.get_theme_colors()
+            hover_color = QColor(solid.red(), solid.green(), solid.blue(), 60)
+            
+            hover_sel.format.setBackground(hover_color)
+            from PyQt6.QtGui import QTextFormat, QTextCharFormat
+            hover_sel.format.setProperty(QTextFormat.Property.TextUnderlineStyle, QTextCharFormat.UnderlineStyle.SingleUnderline)
+            
+            hover_cursor = QTextCursor(doc)
+            hover_cursor.setPosition(block_pos + target_match.start())
+            hover_cursor.setPosition(block_pos + target_match.end(), QTextCursor.MoveMode.KeepAnchor)
+            hover_sel.cursor = hover_cursor
+            
+            self.hover_selection = hover_sel
+            self.reader_box.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.hover_selection = None
+            self.reader_box.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            
+        self._apply_highlights()
+
+
+    def play_from_index(self, index, start_word_idx=0):
         """Kills current thread, cleans up, and boots a new one at the target index."""
         if index < 0 or index >= len(self.book_paragraphs):
             return
@@ -1002,7 +1111,8 @@ class AudiobookUI(QMainWindow):
             self.book_paragraphs, 
             start_index=index,
             voice=selected_voice,
-            speed=edge_speed # Pass the translated percentage to the backend
+            speed=edge_speed, # Pass the translated percentage to the backend
+            start_word_idx=start_word_idx
         )
         self.engine_thread.paragraph_changed.connect(self.update_reader_box)
         self.engine_thread.word_highlighted.connect(self.update_word_highlight)
@@ -1053,6 +1163,8 @@ class AudiobookUI(QMainWindow):
             selections.append(self.para_selection)
         if hasattr(self, 'word_selection') and self.word_selection:
             selections.append(self.word_selection)
+        if hasattr(self, 'hover_selection') and self.hover_selection:
+            selections.append(self.hover_selection)
         self.reader_box.setExtraSelections(selections)
 
     def auto_save_notes(self):
@@ -1089,6 +1201,14 @@ class AudiobookUI(QMainWindow):
 
     def update_reader_box(self, index, text):
         self.current_paragraph_index = index 
+        
+        # Cache regex matches to prevent lagging on mouse hover
+        if index < len(self.book_paragraphs):
+            para = self.book_paragraphs[index]
+            self.current_word_matches = list(re.finditer(r"[^\W_]+(?:[-'’][^\W_]+)*", para))
+        else:
+            self.current_word_matches = []
+        self.last_hovered_word_idx = -1
         
         # --- NEW: Save progress instantly ---
         self.save_bookmark() 
