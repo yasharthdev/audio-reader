@@ -67,6 +67,26 @@ class ContentsDialog(QDialog):
     def on_item_clicked(self, item, column):
         self.selected_index = item.data(0, Qt.ItemDataRole.UserRole)
         self.accept()
+
+class PasteTextDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Paste Text")
+        self.resize(600, 400)
+        self.layout = QVBoxLayout(self)
+        
+        self.text_edit = QTextEdit()
+        self.text_edit.setPlaceholderText("Paste your text here...")
+        self.layout.addWidget(self.text_edit)
+        
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        self.layout.addWidget(self.button_box)
+        
+    def get_text(self):
+        return self.text_edit.toPlainText()
+
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QSettings
 from PyQt6.QtGui import QKeySequence, QShortcut, QFont, QAction, QColor, QTextCursor, QTextCharFormat
 
@@ -261,13 +281,13 @@ class AudioEngineThread(QThread):
     word_highlighted = pyqtSignal(int, int, int)
     waiting_for_audio = pyqtSignal()
 
-    def __init__(self, paragraphs, start_index=0, voice="en-US-BrianNeural", speed="+0%", start_word_idx=0):
+    def __init__(self, paragraphs, start_index=0, voice="en-US-BrianNeural", speed="+0%", start_char_idx=0):
         super().__init__()
         self.paragraphs = paragraphs
         self.start_index = start_index  # <--- Track where we start
         self.voice = voice
         self.speed = speed
-        self.start_word_idx = start_word_idx
+        self.start_char_idx = start_char_idx
         
         self.is_running = True
         self.is_paused = False
@@ -328,13 +348,35 @@ class AudioEngineThread(QThread):
             self.paragraph_changed.emit(current_index, para.replace('\n', '<br>'))
             
             srt_data = parse_srt(srt_path)
+            
+            # --- ALIGNMENT LOGIC ---
+            para_lower = para.lower()
+            last_pos = 0
+            for w_data in srt_data:
+                spoken = w_data["word"].lower()
+                pos = para_lower.find(spoken, last_pos)
+                if pos != -1:
+                    w_data["start_idx"] = pos
+                    w_data["end_idx"] = pos + len(spoken)
+                    last_pos = pos + len(spoken)
+                else:
+                    w_data["start_idx"] = -1
+                    w_data["end_idx"] = -1
+            
             current_word_idx = 0
             time_offset = 0
             
-            if self.start_word_idx > 0 and current_index == self.start_index:
-                if self.start_word_idx < len(srt_data):
-                    start_ms = srt_data[self.start_word_idx]["start"]
-                    current_word_idx = self.start_word_idx
+            if self.start_char_idx > 0 and current_index == self.start_index:
+                # Find the first word in srt_data that comes AT or AFTER the clicked char idx
+                found_idx = 0
+                for i, w_data in enumerate(srt_data):
+                    if w_data["end_idx"] > self.start_char_idx:
+                        found_idx = i
+                        break
+                        
+                if found_idx < len(srt_data):
+                    start_ms = srt_data[found_idx]["start"]
+                    current_word_idx = found_idx
                     start_sec = start_ms / 1000.0
                     pygame.mixer.music.load(mp3_path)
                     pygame.mixer.music.play(start=start_sec)
@@ -362,13 +404,8 @@ class AudioEngineThread(QThread):
                         target_word = srt_data[current_word_idx]
                         
                         if current_time >= target_word["start"]:
-                            if current_word_idx < len(word_matches):
-                                match = word_matches[current_word_idx]
-                                start_idx = match.start()
-                                end_idx = match.end()
-                                
-                                self.word_highlighted.emit(current_index, start_idx, end_idx)
-                                
+                            if target_word["start_idx"] != -1:
+                                self.word_highlighted.emit(current_index, target_word["start_idx"], target_word["end_idx"])
                             current_word_idx += 1
                 
                 if not self.is_paused and not is_playing_audio():
@@ -399,7 +436,8 @@ class BookLoaderThread(QThread):
                 self.finished_loading.emit(paragraphs, chapter_map)
             else:
                 content = Path(self.file_path).read_text(encoding='utf-8')
-                paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+                content = content.replace('\r\n', '\n')
+                paragraphs = [p.strip() for p in re.split(r'\n+', content) if p.strip()]
                 self.finished_loading.emit(paragraphs, [])
         except Exception as e:
             self.error_loading.emit(str(e))
@@ -526,6 +564,7 @@ class AudiobookUI(QMainWindow):
         
         button_layout = QHBoxLayout()
         self.load_button = QPushButton("Load Book")
+        self.paste_button = QPushButton("Paste Text")
         
         self.voice_combo = QComboBox()
         raw_voices = [
@@ -565,6 +604,7 @@ class AudiobookUI(QMainWindow):
         self.contents_btn.setEnabled(False)
         
         button_layout.addWidget(self.load_button)
+        button_layout.addWidget(self.paste_button)
         button_layout.addWidget(self.history_btn)
         button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
@@ -582,7 +622,7 @@ class AudiobookUI(QMainWindow):
         button_layout.addWidget(self.contents_btn)
         
         # --- Enforce Size Policies ---
-        toolbar_widgets = [self.load_button, self.history_btn, self.voice_combo, 
+        toolbar_widgets = [self.load_button, self.paste_button, self.history_btn, self.voice_combo, 
                            self.speed_combo, self.settings_btn, self.prev_button, 
                            self.play_button, self.next_button, self.toggle_panel_btn, 
                            self.contents_btn]
@@ -656,6 +696,7 @@ class AudiobookUI(QMainWindow):
 
         # --- Signal Connections ---
         self.load_button.clicked.connect(self.load_book_dialog)
+        self.paste_button.clicked.connect(self.paste_text_dialog)
         self.play_button.clicked.connect(self.toggle_pause)
         self.next_button.clicked.connect(self.skip_next)
         self.prev_button.clicked.connect(self.skip_prev)
@@ -755,21 +796,41 @@ class AudiobookUI(QMainWindow):
     def refresh_history_menu(self):
         self.history_menu.clear()
         recent_books = self.settings.value("recent_books", [], type=list)
+        
+        # Filter out pasted text if it accidentally got in there from previous versions
+        recent_books = [p for p in recent_books if not p.endswith("pasted_text.txt")]
+        
         if recent_books:
             for book_path in recent_books:
                 if os.path.exists(book_path):
                     filename = os.path.basename(book_path)
-                    action = QAction(filename, self)
-                    action.triggered.connect(lambda checked, path=book_path: self.load_book_from_path(path))
-                    self.history_menu.addAction(action)
+                    
+                    # Create a submenu for each book
+                    book_menu = self.history_menu.addMenu(filename)
+                    
+                    open_action = QAction("Open", self)
+                    open_action.triggered.connect(lambda checked, path=book_path: self.load_book_from_path(path))
+                    book_menu.addAction(open_action)
+                    
+                    delete_action = QAction("Remove from History", self)
+                    delete_action.triggered.connect(lambda checked, path=book_path: self.remove_from_history(path))
+                    book_menu.addAction(delete_action)
+                    
             self.history_menu.addSeparator()
-            clear_action = QAction("Clear History", self)
+            clear_action = QAction("Clear All History", self)
             clear_action.triggered.connect(self.clear_history)
             self.history_menu.addAction(clear_action)
         else:
             empty_action = QAction("No Recent Books", self)
             empty_action.setEnabled(False)
             self.history_menu.addAction(empty_action)
+
+    def remove_from_history(self, path):
+        recent_books = self.settings.value("recent_books", [], type=list)
+        if path in recent_books:
+            recent_books.remove(path)
+            self.settings.setValue("recent_books", recent_books)
+            self.refresh_history_menu()
 
     def clear_history(self):
         self.settings.setValue("recent_books", [])
@@ -987,6 +1048,20 @@ class AudiobookUI(QMainWindow):
         if file_path:
             self.load_book_from_path(file_path)
 
+    def paste_text_dialog(self):
+        dialog = PasteTextDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            text = dialog.get_text()
+            if text.strip():
+                # Process the pasted text like a txt file
+                text = text.replace('\r\n', '\n')
+                paragraphs = [p.strip() for p in re.split(r'\n+', text) if p.strip()]
+                    
+                self.current_file_path = str(self.app_dir / "pasted_text.txt")
+                Path(self.current_file_path).write_text(text, encoding='utf-8')
+                
+                self.on_book_loaded(paragraphs, [])
+
     def load_book_from_path(self, file_path):
         if not file_path or not os.path.exists(file_path):
             return
@@ -1065,6 +1140,7 @@ class AudiobookUI(QMainWindow):
             
         word_matches = getattr(self, 'current_word_matches', [])
         
+        # Verify the click was actually on a valid word match, just like before
         target_word_idx = -1
         for idx, match in enumerate(word_matches):
             if match.start() <= char_pos <= match.end():
@@ -1072,7 +1148,7 @@ class AudiobookUI(QMainWindow):
                 break
                 
         if target_word_idx != -1:
-            self.play_from_index(self.current_paragraph_index, start_word_idx=target_word_idx)
+            self.play_from_index(self.current_paragraph_index, start_char_idx=char_pos)
 
     def on_word_hovered(self, char_pos):
         if char_pos == -1 or not self.book_paragraphs or self.current_paragraph_index >= len(self.book_paragraphs):
@@ -1125,7 +1201,7 @@ class AudiobookUI(QMainWindow):
         self._apply_highlights()
 
 
-    def play_from_index(self, index, start_word_idx=0):
+    def play_from_index(self, index, start_char_idx=0):
         """Kills current thread, cleans up, and boots a new one at the target index."""
         if index < 0 or index >= len(self.book_paragraphs):
             return
@@ -1176,7 +1252,7 @@ class AudiobookUI(QMainWindow):
             start_index=index,
             voice=selected_voice,
             speed=edge_speed, # Pass the translated percentage to the backend
-            start_word_idx=start_word_idx
+            start_char_idx=start_char_idx
         )
         self.engine_thread.paragraph_changed.connect(self.update_reader_box)
         self.engine_thread.word_highlighted.connect(self.update_word_highlight)
