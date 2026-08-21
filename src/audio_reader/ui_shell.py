@@ -20,6 +20,26 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget,
                              QTreeWidget, QTreeWidgetItem, QScrollArea, QFrame, QLabel)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QSettings
 
+def split_long_paragraphs(text):
+    paragraphs = [p.strip() for p in re.split(r'\n+', text.replace('\r\n', '\n')) if p.strip()]
+    final_paragraphs = []
+    for p in paragraphs:
+        if len(p) > 1000:
+            # split by sentence ending
+            sentences = re.split(r'(?<=[.!?])\s+', p)
+            current_chunk = ""
+            for s in sentences:
+                if len(current_chunk) + len(s) > 1000 and current_chunk:
+                    final_paragraphs.append(current_chunk.strip())
+                    current_chunk = s
+                else:
+                    current_chunk += " " + s if current_chunk else s
+            if current_chunk:
+                final_paragraphs.append(current_chunk.strip())
+        else:
+            final_paragraphs.append(p)
+    return final_paragraphs
+
 class ContentsDialog(QDialog):
     def __init__(self, chapter_map, parent=None):
         super().__init__(parent)
@@ -107,6 +127,7 @@ QMainWindow, QWidget { background-color: #F8F9FA; color: #2B2D42; }
 QLabel { color: #2B2D42; background: transparent; }
 QToolBar { background-color: #FFFFFF; border-bottom: 1px solid #E5E7EB; }
 QTextEdit, QListWidget { background-color: #FFFFFF; color: #2B2D42; padding: 24px 32px; border: none; }
+QTextEdit#ReaderBox { color: rgba(43, 45, 66, 90); }
 QPushButton, QToolButton { background-color: #1E293B; color: #FFFFFF; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; border: none; }
 QPushButton:hover, QToolButton:hover { background-color: #334155; }
 QComboBox { background-color: #FFFFFF; color: #1E293B; border: 1px solid #CBD5E1; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; }
@@ -123,6 +144,7 @@ QMainWindow, QWidget { background-color: #1E1E1E; color: #E0E0E0; }
 QLabel { color: #E0E0E0; background: transparent; }
 QToolBar { background-color: #252526; border-bottom: 1px solid #333333; }
 QTextEdit, QListWidget { background-color: #1E1E1E; color: #E0E0E0; padding: 24px 32px; border: none; }
+QTextEdit#ReaderBox { color: rgba(224, 224, 224, 90); }
 QPushButton, QToolButton { background-color: #333333; color: #FFFFFF; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; border: none; }
 QPushButton:hover, QToolButton:hover { background-color: #444444; }
 QComboBox { background-color: #2D2D30; color: #F3F4F6; border: 1px solid #3E3E42; border-radius: 8px; padding: 0px 16px; height: 32px; font-size: 13px; font-weight: 500; }
@@ -436,8 +458,7 @@ class BookLoaderThread(QThread):
                 self.finished_loading.emit(paragraphs, chapter_map)
             else:
                 content = Path(self.file_path).read_text(encoding='utf-8')
-                content = content.replace('\r\n', '\n')
-                paragraphs = [p.strip() for p in re.split(r'\n+', content) if p.strip()]
+                paragraphs = split_long_paragraphs(content)
                 self.finished_loading.emit(paragraphs, [])
         except Exception as e:
             self.error_loading.emit(str(e))
@@ -496,30 +517,30 @@ class LoadingOverlay(QWidget):
         )
 
 class ReaderTextEdit(QTextEdit):
-    word_clicked = pyqtSignal(int)
-    word_hovered = pyqtSignal(int)
+    word_clicked = pyqtSignal(int, int) # (block_number, char_pos)
+    word_hovered = pyqtSignal(int, int) # (block_number, char_pos)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.setObjectName("ReaderBox")
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        # If there's no selection, they just clicked
         if not self.textCursor().hasSelection():
             cursor = self.cursorForPosition(event.pos())
-            self.word_clicked.emit(cursor.positionInBlock())
+            self.word_clicked.emit(cursor.blockNumber(), cursor.positionInBlock())
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
         if not self.textCursor().hasSelection():
             cursor = self.cursorForPosition(event.pos())
-            self.word_hovered.emit(cursor.positionInBlock())
+            self.word_hovered.emit(cursor.blockNumber(), cursor.positionInBlock())
             
     def leaveEvent(self, event):
         super().leaveEvent(event)
-        self.word_hovered.emit(-1)
+        self.word_hovered.emit(-1, -1)
         
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -562,6 +583,10 @@ class AudiobookUI(QMainWindow):
         self.reader_box.word_clicked.connect(self.on_word_clicked)
         self.reader_box.word_hovered.connect(self.on_word_hovered)
         
+        self.auto_scroll_enabled = True
+        self._is_programmatic_scroll = False
+        self.reader_box.verticalScrollBar().valueChanged.connect(self.on_scroll_value_changed)
+        
         button_layout = QHBoxLayout()
         self.load_button = QPushButton("Load Book")
         self.paste_button = QPushButton("Paste Text")
@@ -602,29 +627,27 @@ class AudiobookUI(QMainWindow):
         self.contents_btn = QPushButton("Contents")
         self.contents_btn.clicked.connect(self.show_contents_dialog)
         self.contents_btn.setEnabled(False)
+        self.snap_button = QPushButton("Snap to Current")
         
         button_layout.addWidget(self.load_button)
         button_layout.addWidget(self.paste_button)
         button_layout.addWidget(self.history_btn)
         button_layout.addWidget(self.voice_combo) 
         button_layout.addWidget(self.speed_combo)
-        button_layout.addWidget(self.settings_btn)
-        
-        button_layout.addStretch()
-        
         button_layout.addWidget(self.prev_button)
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.next_button)
-        
-        button_layout.addStretch()
-        
+        button_layout.addWidget(self.snap_button)
+        button_layout.addWidget(self.settings_btn)
         button_layout.addWidget(self.toggle_panel_btn)
         button_layout.addWidget(self.contents_btn)
+        
+        self.snap_button.clicked.connect(self.snap_to_current_paragraph)
         
         # --- Enforce Size Policies ---
         toolbar_widgets = [self.load_button, self.paste_button, self.history_btn, self.voice_combo, 
                            self.speed_combo, self.settings_btn, self.prev_button, 
-                           self.play_button, self.next_button, self.toggle_panel_btn, 
+                           self.play_button, self.next_button, self.snap_button, self.toggle_panel_btn, 
                            self.contents_btn]
         for w in toolbar_widgets:
             w.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
@@ -1056,9 +1079,8 @@ class AudiobookUI(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             text = dialog.get_text()
             if text.strip():
-                # Process the pasted text like a txt file
-                text = text.replace('\r\n', '\n')
-                paragraphs = [p.strip() for p in re.split(r'\n+', text) if p.strip()]
+                # Process the pasted text safely
+                paragraphs = split_long_paragraphs(text)
                     
                 self.current_file_path = str(self.app_dir / "pasted_text.txt")
                 Path(self.current_file_path).write_text(text, encoding='utf-8')
@@ -1114,6 +1136,10 @@ class AudiobookUI(QMainWindow):
             self.reader_box.setHtml("<h3>Error:</h3><p>The selected file is empty or could not be parsed.</p>")
             return
             
+        # Load the entire book into the reader_box
+        html = "".join([f"<p>{p}</p>" for p in self.book_paragraphs])
+        self.reader_box.setHtml(html)
+        
         # Enable the Contents button if we have chapters
         if self.chapter_map:
             self.contents_btn.setEnabled(True)
@@ -1137,13 +1163,13 @@ class AudiobookUI(QMainWindow):
         self.load_button.setEnabled(True)
         self.reader_box.setHtml(f"<h3>Error:</h3><p>Could not load file: {error_msg}</p>")
 
-    def on_word_clicked(self, char_pos):
-        if not self.book_paragraphs or self.current_paragraph_index >= len(self.book_paragraphs):
+    def on_word_clicked(self, block_number, char_pos):
+        if not self.book_paragraphs or block_number >= len(self.book_paragraphs) or block_number < 0:
             return
             
-        word_matches = getattr(self, 'current_word_matches', [])
+        para = self.book_paragraphs[block_number]
+        word_matches = list(re.finditer(r"[^\W_]+(?:[-'’][^\W_]+)*", para))
         
-        # Verify the click was actually on a valid word match, just like before
         target_word_idx = -1
         for idx, match in enumerate(word_matches):
             if match.start() <= char_pos <= match.end():
@@ -1151,18 +1177,19 @@ class AudiobookUI(QMainWindow):
                 break
                 
         if target_word_idx != -1:
-            self.play_from_index(self.current_paragraph_index, start_char_idx=char_pos)
+            self.play_from_index(block_number, start_char_idx=char_pos)
 
-    def on_word_hovered(self, char_pos):
-        if char_pos == -1 or not self.book_paragraphs or self.current_paragraph_index >= len(self.book_paragraphs):
-            if getattr(self, 'last_hovered_word_idx', None) != -1:
+    def on_word_hovered(self, block_number, char_pos):
+        if char_pos == -1 or not self.book_paragraphs or block_number >= len(self.book_paragraphs) or block_number < 0:
+            if getattr(self, 'last_hovered_word_sig', None) is not None:
                 self.hover_selection = None
-                self.last_hovered_word_idx = -1
+                self.last_hovered_word_sig = None
                 self._apply_highlights()
                 self.reader_box.viewport().setCursor(Qt.CursorShape.IBeamCursor)
             return
 
-        word_matches = getattr(self, 'current_word_matches', [])
+        para = self.book_paragraphs[block_number]
+        word_matches = list(re.finditer(r"[^\W_]+(?:[-'’][^\W_]+)*", para))
         
         target_idx = -1
         target_match = None
@@ -1172,14 +1199,18 @@ class AudiobookUI(QMainWindow):
                 target_match = match
                 break
                 
-        if target_idx == getattr(self, 'last_hovered_word_idx', None):
+        # We can uniquely identify the hovered word by a tuple of (block_number, word_idx)
+        current_hover_sig = (block_number, target_idx)
+        if current_hover_sig == getattr(self, 'last_hovered_word_sig', None):
             return
             
-        self.last_hovered_word_idx = target_idx
+        self.last_hovered_word_sig = current_hover_sig
                 
         if target_match:
             doc = self.reader_box.document()
-            block = doc.lastBlock()
+            block = doc.findBlockByNumber(block_number)
+            if not block.isValid(): return
+            
             block_pos = block.position()
             
             hover_sel = QTextEdit.ExtraSelection()
@@ -1262,8 +1293,7 @@ class AudiobookUI(QMainWindow):
         self.engine_thread.waiting_for_audio.connect(self.loading_overlay.start_loading)
         
         # --- NEW: Eagerly update UI so it feels instantaneous ---
-        para_text = self.book_paragraphs[index]
-        self.update_reader_box(index, para_text.replace('\n', '<br>'))
+        self.update_reader_box(index, "")
         self.statusBar().showMessage(f"Parsing Audio for Paragraph {index + 1} / {len(self.book_paragraphs)}...")
         self.loading_overlay.start_loading()
         
@@ -1280,9 +1310,10 @@ class AudiobookUI(QMainWindow):
             return
             
         doc = self.reader_box.document()
-        block = doc.lastBlock()
-        block_pos = block.position()
+        block = doc.findBlockByNumber(index)
+        if not block.isValid(): return
         
+        block_pos = block.position()
         solid, alpha, text_color = self.get_theme_colors()
         
         word_sel = QTextEdit.ExtraSelection()
@@ -1293,18 +1324,6 @@ class AudiobookUI(QMainWindow):
         word_cursor.setPosition(block_pos + end_char, QTextCursor.MoveMode.KeepAnchor)
         word_sel.cursor = word_cursor
         
-        para_sel = QTextEdit.ExtraSelection()
-        para_sel.format.setBackground(alpha)
-        para_cursor = QTextCursor(doc)
-        text = block.text()
-        leading = len(text) - len(text.lstrip())
-        trailing = len(text) - len(text.rstrip())
-        
-        para_cursor.setPosition(block_pos + leading)
-        para_cursor.setPosition(block_pos + len(text) - trailing, QTextCursor.MoveMode.KeepAnchor)
-        para_sel.cursor = para_cursor
-        
-        self.para_selection = para_sel
         self.word_selection = word_sel
         self._apply_highlights()
 
@@ -1350,37 +1369,69 @@ class AudiobookUI(QMainWindow):
         result = search_toc(self.chapter_map)
         return result if result else ""
 
+    def on_scroll_value_changed(self, value):
+        if not self._is_programmatic_scroll:
+            self.auto_scroll_enabled = False
+            
+    def snap_to_current_paragraph(self):
+        self.auto_scroll_enabled = True
+        self._is_programmatic_scroll = True
+        
+        doc = self.reader_box.document()
+        block = doc.findBlockByNumber(self.current_paragraph_index)
+        if block.isValid():
+            cursor = QTextCursor(block)
+            self.reader_box.setTextCursor(cursor)
+            
+            # Center the cursor vertically
+            cursor_rect = self.reader_box.cursorRect(cursor)
+            viewport_height = self.reader_box.viewport().height()
+            scrollbar = self.reader_box.verticalScrollBar()
+            offset = cursor_rect.top() - (viewport_height // 2)
+            scrollbar.setValue(scrollbar.value() + offset)
+            
+            cursor.clearSelection()
+            self.reader_box.setTextCursor(cursor)
+            
+        self._is_programmatic_scroll = False
+
     def update_reader_box(self, index, text):
         self.current_paragraph_index = index 
-        
-        # Cache regex matches to prevent lagging on mouse hover
-        if index < len(self.book_paragraphs):
-            para = self.book_paragraphs[index]
-            self.current_word_matches = list(re.finditer(r"[^\W_]+(?:[-'’][^\W_]+)*", para))
-        else:
-            self.current_word_matches = []
-        self.last_hovered_word_idx = -1
-        
-        # --- NEW: Save progress instantly ---
+        self.last_hovered_word_sig = None
         self.save_bookmark() 
         
-        # 1. Grab the scrollbar and save its current position
-        scrollbar = self.reader_box.verticalScrollBar()
-        
-        # Safely get the value to appease strict type checkers
-        current_scroll = 0
-        if scrollbar is not None:
-            current_scroll = scrollbar.value()
-        
-        # 2. Update the text (which automatically resets the scroll to 0)
-        header_text = self.get_active_chapter(index)
-        self.reader_box.setHtml(f"<h3>{header_text}</h3><p>{text}</p>")
-        
-        # 3. Instantly snap the scrollbar back to where you left it
-        if scrollbar is not None:
-            scrollbar.setValue(current_scroll)
+        doc = self.reader_box.document()
+        block = doc.findBlockByNumber(index)
+        if block.isValid():
+            block_pos = block.position()
+            solid, alpha, text_color = self.get_theme_colors()
             
-        # 4. Clear any loading messages
+            para_sel = QTextEdit.ExtraSelection()
+            para_sel.format.setBackground(alpha)
+            
+            # Make the active paragraph text fully opaque
+            base_text_color = QColor("#2B2D42") if self.settings.value("ui_mode", "Light", type=str) == "Light" else QColor("#E0E0E0")
+            para_sel.format.setForeground(base_text_color)
+            
+            para_cursor = QTextCursor(doc)
+            
+            b_text = block.text()
+            leading = len(b_text) - len(b_text.lstrip())
+            trailing = len(b_text) - len(b_text.rstrip())
+            
+            para_cursor.setPosition(block_pos + leading)
+            para_cursor.setPosition(block_pos + len(b_text) - trailing, QTextCursor.MoveMode.KeepAnchor)
+            para_sel.cursor = para_cursor
+            self.para_selection = para_sel
+        else:
+            self.para_selection = None
+            
+        self.word_selection = None
+        self._apply_highlights()
+        
+        if self.auto_scroll_enabled:
+            self.snap_to_current_paragraph()
+        
         self.statusBar().clearMessage()
         if hasattr(self, 'loading_overlay'):
             self.loading_overlay.stop_loading()
