@@ -866,6 +866,9 @@ class AudiobookUI(QMainWindow):
 
     def get_bookmark(self, file_path):
         """Reads the JSON database and returns the auto-resume paragraph index."""
+        if file_path and file_path.endswith("pasted_text.txt"):
+            return 0
+            
         bookmarks_file = self.app_dir / "bookmarks.json"
         if not bookmarks_file.exists():
             return 0
@@ -969,7 +972,7 @@ class AudiobookUI(QMainWindow):
 
     def save_bookmark(self):
         """Saves the auto-resume paragraph index to the JSON database."""
-        if not self.current_file_path:
+        if not self.current_file_path or self.current_file_path.endswith("pasted_text.txt"):
             return
             
         bookmarks_file = self.app_dir / "bookmarks.json"
@@ -992,7 +995,7 @@ class AudiobookUI(QMainWindow):
 
     def create_explicit_bookmark(self):
         """Prompts the user for a name and saves the current index as a hard bookmark."""
-        if not self.current_file_path:
+        if not self.current_file_path or self.current_file_path.endswith("pasted_text.txt"):
             return
             
         name, ok = QInputDialog.getText(self, "New Bookmark", "Enter a name for this bookmark:")
